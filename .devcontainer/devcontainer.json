@@ -1,0 +1,14 @@
+{
+  "image": "mcr.microsoft.com/devcontainers/python:3.9",
+  "features": {},
+  "postCreateCommand": "pip install --upgrade pip",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-toolsai.jupyter"
+      ]
+    }
+  },
+  "remoteUser": "vscode"
+}
