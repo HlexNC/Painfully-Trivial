@@ -1,0 +1,12 @@
+Target variable: arrival_delay_m
+Features to be removed: 
+departure_delay_check and arrival_delay_check: high imbalance (roughly 69.8%) and not crucial to the model, delays can be detected from other features like arrival_delay_m.
+
+departure_delay_m: highly correlated with arrival_delay_m and may affect the prediction results negatively.
+
+info: 68.7% missing values, reasons for delay doesn't affect the prediction itself.
+
+Path, eva_nr, station, state, city, long, lat, ID: We can represent the station only by the zip.
+
+We will then later see if other features needs to be removed by practicing feature selection algorithms and checking leakages after training the first model. 
+The list would be: (zip, category, arrival_plan, departure_plan, arrival_change, departure_change, arrival_delay_m)
