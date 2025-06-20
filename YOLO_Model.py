@@ -62,9 +62,13 @@ copy_files(val_files, output_images_val, output_labels_val)
 print(f"✅ Done! Train: {len(train_files)}, Val: {len(val_files)}")
 '''
 
+
+'''
+# Code to train the model
+
 from ultralytics import YOLO
 
-# Load a YOLOv8 model (you can try yolov8n, yolov8s, etc.)
+# Load a YOLOv8 model
 model = YOLO('yolov8n.pt')  # nano version for fast training/testing
 
 # Train the model
@@ -76,4 +80,61 @@ model.train(
     name='waste-bin-detector',
     project='trash_yolo_project',
 )
+'''
+
+
+
+'''
+from ultralytics import YOLO
+
+# Load a YOLOv8 model
+model = YOLO('yolov8s.pt')  # nano version for fast training/testing
+
+# Train the model
+model.train(
+    data='YOLO_Dataset/data.yaml',   # Path to your data.yaml
+    epochs=50,
+    imgsz=640,
+    batch=16,
+    name='waste-bin-detector-v8s',
+    project='trash_yolo_project',
+)
+'''
+
+
+
+# Testing the model
+from ultralytics import YOLO
+import cv2
+
+# Load your trained model
+model = YOLO('trash_yolo_project/waste-bin-detector-v8s/weights/best.pt')
+
+# Replace with your phone's actual stream URL
+stream_url = 'http://172.20.10.3:4747/video'
+
+# Start video capture from IP stream
+cap = cv2.VideoCapture(stream_url)
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        print("Failed to grab frame")
+        break
+
+    # Run YOLO detection on the frame
+    results = model.predict(frame, conf=0.4, stream=False)
+
+    # Plot results on frame
+    annotated_frame = results[0].plot()
+
+    # Show live stream with predictions
+    cv2.imshow("Trash Bin Detection", annotated_frame)
+
+    # Break on 'q' key
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
 
