@@ -83,7 +83,6 @@ model.train(
 '''
 
 
-
 '''
 from ultralytics import YOLO
 
@@ -96,42 +95,89 @@ model.train(
     epochs=50,
     imgsz=640,
     batch=16,
-    name='waste-bin-detector-v8s',
+    name='waste-bin-detector-v8s-d',
     project='trash_yolo_project',
 )
 '''
 
 
 
-# Testing the model
 from ultralytics import YOLO
-import cv2
+import cv2, time
 
-# Load your trained model
+# Define what can go where
+bin_rules = {
+    "Biomüll": ["Food scraps", "Eggshells", "Tea bags"],
+    "Papier":  ["Newspapers", "Cardboard", "Envelopes"],
+    "Restmüll": ["Cigarette butts", "Vacuum cleaner bags", "Hygiene products"],
+    "Glas": ["Bottles", "Jars (without lids)"]
+}
+
+# Load your model
 model = YOLO('trash_yolo_project/waste-bin-detector-v8s/weights/best.pt')
 
-# Replace with your phone's actual stream URL
-stream_url = 'http://172.20.10.3:4747/video'
+# Camera stream (change IP as needed)
+stream_url = 'http://192.168.0.109:4747/video'
 
-# Start video capture from IP stream
-cap = cv2.VideoCapture(stream_url)
+CONF = 0.65
+IOU = 0.35
+SIZE = 640
+
+cap = cv2.VideoCapture(0)
 
 while True:
-    ret, frame = cap.read()
-    if not ret:
-        print("Failed to grab frame")
-        break
+    ok, frame = cap.read()
+    if not ok:
+        print("❌ Stream lost"); break
 
-    # Run YOLO detection on the frame
-    results = model.predict(frame, conf=0.4, stream=False)
+    t0 = time.time()
 
-    # Plot results on frame
-    annotated_frame = results[0].plot()
+    # Run prediction
+    results = model.predict(frame, imgsz=SIZE, conf=CONF, iou=IOU, stream=False)[0]
 
-    # Show live stream with predictions
-    cv2.imshow("Trash Bin Detection", annotated_frame)
+    # Copy the annotated frame
+    annotated = results.plot().copy()
 
-    # Break on 'q' key
+    for box in results.boxes:
+        cls_id = int(box.cls[0])
+        cls_name = model.names[cls_id]
+
+        x1, y1 = int(box.xyxy[0][0]), int(box.xyxy[0][1])
+        info = bin_rules.get(cls_name, ["No info available"])
+        text = f"{cls_name}: " + ", ".join(info[:2])  # Show up to 2 items
+
+        # Draw text
+        # Calculate text size
+        (font_w, font_h), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, 0.6, 1)
+
+        # Coordinates for the background rectangle
+        rect_x1 = x1
+        rect_y1 = y1 + 5
+        rect_x2 = x1 + font_w + 10
+        rect_y2 = y1 + font_h + 20
+
+        # Ensure the box doesn't go out of frame
+        rect_x2 = min(rect_x2, annotated.shape[1] - 1)
+        rect_y2 = min(rect_y2, annotated.shape[0] - 1)
+
+        # Draw background rectangle (filled with opacity)
+        overlay = annotated.copy()
+        cv2.rectangle(overlay, (rect_x1, rect_y1), (rect_x2, rect_y2), (0, 0, 0), -1)
+        alpha = 0.5
+        annotated = cv2.addWeighted(overlay, alpha, annotated, 1 - alpha, 0)
+
+        # Draw the text over the rectangle
+        cv2.putText(annotated, text, (x1 + 5, y1 + font_h + 5),
+            cv2.FONT_HERSHEY_DUPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+
+    # Show FPS
+    fps = 1.0 / (time.time() - t0)
+    cv2.putText(annotated, f"{fps:.1f} FPS", (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+    # Display result
+    cv2.imshow("Trash Bin Detection", annotated)
+
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
