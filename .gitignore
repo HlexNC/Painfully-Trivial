@@ -1,3 +1,4 @@
 .venv
 /DBtrainrides.csv
 /YOLO_Dataset
+cv_garbage/YOLO_Dataset
