@@ -3,5 +3,5 @@
 /YOLO_Dataset
 cv_garbage/
 yolov8s.pt
-yolov11n.pt
-runs/
+yolo11n.pt
+runs
