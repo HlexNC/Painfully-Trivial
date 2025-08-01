@@ -1,0 +1,11 @@
+
+    <View>
+      <Image name="image" value="$image"/>
+      <RectangleLabels name="label" toName="image">
+        <Label value="Biomüll" background="#FF6B6B"/>
+        <Label value="Glas" background="#4ECDC4"/>
+        <Label value="Papier" background="#45B7D1"/>
+        <Label value="Restmüll" background="#96CEB4"/>
+      </RectangleLabels>
+    </View>
+    
