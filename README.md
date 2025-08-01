@@ -337,22 +337,22 @@ If you use this work in your research, please cite:
 <table>
   <tr>
     <td align="center">
-      <a href="https://github.com/sameer">
-        <img src="https://github.com/sameer.png" width="100px;" alt="Sameer"/><br />
+      <a href="https://github.com/TheSameerCode">
+        <img src="https://github.com/TheSameerCode.png" width="100px;" alt="Sameer"/><br />
         <sub><b>Sameer</b></sub>
       </a><br />
       💻 📊 🔬
     </td>
     <td align="center">
-      <a href="https://github.com/fares">
-        <img src="https://github.com/fares.png" width="100px;" alt="Fares"/><br />
+      <a href="https://github.com/FaresM7">
+        <img src="https://github.com/FaresM7.png" width="100px;" alt="Fares"/><br />
         <sub><b>Fares</b></sub>
       </a><br />
       💻 🎨 📱
     </td>
     <td align="center">
-      <a href="https://github.com/alex">
-        <img src="https://github.com/alex.png" width="100px;" alt="Alex"/><br />
+      <a href="https://github.com/HlexNC">
+        <img src="https://github.com/HlexNC.png" width="100px;" alt="Alex"/><br />
         <sub><b>Alex</b></sub>
       </a><br />
       💻 🚀 📝
