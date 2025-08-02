@@ -9,3 +9,4 @@ runs
 /cv_garbage/YOLO_Dataset
 /cv_garbage/models
 /cv_garbage/results
+/output.json

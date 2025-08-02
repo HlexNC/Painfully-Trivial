@@ -10,18 +10,21 @@ import fnmatch
 import mimetypes
 
 # Define extensions that require partial file reading
-PARTIAL_READ_EXTENSIONS = {'.csv', '.jsonl', '.txt', '.log', '.ipynb'}
+PARTIAL_READ_EXTENSIONS = {'.csv', '.jsonl', '.txt', '.log'}
 
 # Default filenames to ignore
 EXPLICIT_IGNORE_FILES = {
     'LICENSE',
     'output.json',
-    'CHANGELOG.md',
-    '.dockerignore',
     '.gitignore',
-    'package-lock.json',
-    'Project-Charter.md',
-    'uv.lock'    
+}
+
+# Files to include in structure but show content as "..." (like binary files)
+CONTENT_IGNORE_FILES = {
+    '1-Machine-Learning.ipynb',
+    '1-Machine-Learning-v2.ipynb',
+    '2-Computer-Vision.ipynb',
+    'nltk_corpora.ipynb'
 }
 
 # Folders (and file names) to ignore entirely
@@ -31,8 +34,6 @@ EXPLICIT_IGNORE_FOLDERS = {
     'node_modules',
     '.venv',
     '__pycache__',
-    # '__tests__',
-    '__snapshots__',
     'build',
     '.pytest_cache',
     '.ruff_cache'
@@ -89,6 +90,11 @@ def read_file(file_path):
     Replaces all occurrences of '`' with '~' in the file content.
     """
     try:
+        # Check if the filename is in the content ignore list
+        filename = os.path.basename(file_path)
+        if filename in CONTENT_IGNORE_FILES:
+            return "..."
+        
         mime_type, _ = mimetypes.guess_type(file_path)
         if mime_type and mime_type.startswith('image'):
             return "..."

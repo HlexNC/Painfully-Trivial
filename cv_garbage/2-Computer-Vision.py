@@ -166,7 +166,7 @@ if is_colab():
     BASE_PATH = Path("/content/drive/MyDrive/cv_garbage")
 else:
     # For local environment, adjust this path
-    BASE_PATH = Path("./cv_garbage")
+    BASE_PATH = Path(".")
 
 # Create directory structure
 DIRS = {
