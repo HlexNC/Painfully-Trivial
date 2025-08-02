@@ -1,7 +1,11 @@
 .venv
 /DBtrainrides.csv
 /YOLO_Dataset
-cv_garbage/
 yolov8s.pt
 yolo11n.pt
 runs
+/cv_garbage/raw_images
+/cv_garbage/labeled_images
+/cv_garbage/YOLO_Dataset
+/cv_garbage/models
+/cv_garbage/results

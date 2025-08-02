@@ -6,7 +6,7 @@
 <h3 align="center">Deutsche Bahn Delay Prediction | Waste Sorting Assistant</h3>
 
 <p align="center">
-  <a href="https://github.com/YourUsername/painfully-trivial">
+  <a href="https://github.com/HlexNC/Painfully-Trivial">
     <img src="https://img.shields.io/badge/GitHub-Painfully_Trivial-181717?style=for-the-badge&logo=github" alt="GitHub Badge">
   </a>
   <a href="https://www.python.org/downloads/release/python-3100/">
@@ -93,7 +93,7 @@ nvidia-smi
 
 ```bash
 # Clone the repository
-git clone https://github.com/YourUsername/painfully-trivial.git
+git clone https://github.com/HlexNC/Painfully-Trivial.git
 cd painfully-trivial
 
 # Create virtual environment
@@ -322,13 +322,13 @@ git push origin feature/AmazingFeature
 If you use this work in your research, please cite:
 
 ```bibtex
-@misc{painfully-trivial2024,
+@misc{painfully-trivial2025,
   author = {Sameer, Fares, Alex},
   title = {Painfully Trivial: ML Solutions for Real-World Problems},
-  year = {2024},
+  year = {2025},
   publisher = {GitHub},
   journal = {GitHub repository},
-  howpublished = {\url{https://github.com/YourUsername/painfully-trivial}}
+  howpublished = {\url{https://github.com/HlexNC/Painfully-Trivial}}
 }
 ```
 
@@ -368,6 +368,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **TH Deggendorf** - For academic support and resources
 - **Prof. Dr. Mayer** - Machine Learning course instructor
+- **Prof. Dr. Glauner** - Computer Vision course instructor
 - **Deutsche Bahn** - For providing the delays dataset
 - **City of Deggendorf** - For allowing data collection
 
