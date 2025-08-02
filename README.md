@@ -96,12 +96,7 @@ nvidia-smi
 git clone https://github.com/HlexNC/Painfully-Trivial.git
 cd painfully-trivial
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
+# TODO
 ```
 
 > [!IMPORTANT]
@@ -156,18 +151,6 @@ A real-time object detection system that:
 - **Training**: 50 epochs, batch size 4
 - **Performance**: 95%+ mAP@0.5
 
-#### Usage
-```python
-from ultralytics import YOLO
-import cv2
-
-# Load model
-model = YOLO('cv_garbage/models/waste_detector_best.pt')
-
-# Run inference
-results = model.predict(source=0, conf=0.65, show=True)  # 0 for webcam
-```
-
 </details>
 
 ### 2. Deutsche Bahn Delay Predictor
@@ -197,95 +180,6 @@ A supervised regression model that:
 - Station-specific patterns matter
 
 </details>
-
-## 🌐 Streamlit Deployment
-
-### Local Development
-
-```bash
-cd streamlit_app
-streamlit run app.py
-```
-
-### Docker Deployment
-
-```bash
-# Build image
-docker build -t painfully-trivial:latest .
-
-# Run container
-docker run -p 8501:8501 painfully-trivial:latest
-```
-
-> [!TIP]
-> For camera access in Docker, add `--device=/dev/video0` on Linux or use appropriate flags for your OS.
-
-### CI/CD Pipeline
-
-The project includes automated deployment to GitHub Container Registry:
-
-```yaml
-# .github/workflows/deploy.yml
-name: Build and Deploy
-
-on:
-  push:
-    branches: [main]
-  release:
-    types: [created]
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-      
-      - name: Login to GHCR
-        uses: docker/login-action@v2
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Build and push
-        uses: docker/build-push-action@v4
-        with:
-          push: true
-          tags: ghcr.io/${{ github.repository }}:latest
-```
-
-## 🔧 Configuration
-
-### Model Management
-
-> [!NOTE]
-> Models are stored in GitHub Releases due to size constraints. The app automatically downloads them on first run.
-
-To use custom models:
-
-1. **Via GitHub Release**:
-   ```bash
-   # Upload your model to a new release
-   gh release create v1.0.0 ./models/your_model.pt
-   ```
-
-2. **Via Environment Variable**:
-   ```bash
-   export MODEL_PATH="https://your-storage.com/model.pt"
-   ```
-
-### Retraining Models
-
-The Streamlit app includes a retraining interface:
-
-1. Navigate to "Model Training" page
-2. Upload new labeled data
-3. Configure hyperparameters
-4. Monitor training progress
-5. Evaluate and deploy new model
 
 ## 📊 Performance Metrics
 
