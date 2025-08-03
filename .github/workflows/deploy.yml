@@ -133,12 +133,13 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+          cache-from: type=registry,ref=ghcr.io/hlexnc/waste-sorting-assistant:buildcache
+          cache-to: type=registry,ref=ghcr.io/hlexnc/waste-sorting-assistant:buildcache,mode=max
           build-args: |
             BUILD_DATE=${{ github.event.repository.updated_at }}
             VCS_REF=${{ github.sha }}
             VERSION=${{ steps.meta.outputs.version }}
+
 
   # Job 3: Security Scanning
   security-scan:
