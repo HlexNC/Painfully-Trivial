@@ -4,17 +4,13 @@ import numpy as np
 from ultralytics import YOLO
 import torch
 import tempfile
-from typing import List, Tuple
 import os
 import time
-from datetime import datetime
 import requests
-from pathlib import Path
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import zipfile
-import platform
 
 # Page config
 st.set_page_config(
@@ -838,7 +834,7 @@ def show_detection_page():
         )
 
     with col3:
-        show_fps = st.checkbox("Show FPS", value=True)
+        st.checkbox("Show FPS", value=True)
 
     st.markdown("---")
 
@@ -1250,8 +1246,8 @@ def train_model(architecture, epochs, batch_size, lr, img_size, device, aug_para
             try:
                 with zipfile.ZipFile(DATASET_PATH, "r") as zip_ref:
                     zip_ref.extractall("data/")
-            except:
-                st.warning("Using sample dataset for demo purposes")
+            except Exception as e:
+                st.warning(f"Using sample dataset for demo purposes: {e}")
 
     # Training progress containers
     progress_bar = st.progress(0)
