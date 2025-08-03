@@ -1,6 +1,6 @@
 # Multi-stage build for optimized production image
 # Stage 1: Builder
-FROM python:3.10-slim as builder
+FROM python:3.10-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -72,36 +72,6 @@ WORKDIR /app
 
 # Copy application files
 COPY --chown=appuser:appuser . /app/
-
-# Create Streamlit configuration
-RUN echo '\
-[general]\n\
-email = ""\n\
-\n\
-[server]\n\
-headless = true\n\
-enableCORS = false\n\
-enableXsrfProtection = true\n\
-maxUploadSize = 200\n\
-enableWebsocketCompression = true\n\
-port = 8501\n\
-\n\
-[browser]\n\
-serverAddress = "0.0.0.0"\n\
-gatherUsageStats = false\n\
-\n\
-[theme]\n\
-primaryColor = "#2E7D32"\n\
-backgroundColor = "#FFFFFF"\n\
-secondaryBackgroundColor = "#F0F2F6"\n\
-textColor = "#262730"\n\
-font = "sans serif"\n\
-\n\
-[runner]\n\
-magicEnabled = true\n\
-installTracer = false\n\
-fixMatplotlib = true\n\
-' > /app/.streamlit/config.toml
 
 # Pre-download models (optional, can be done at runtime)
 # COPY --from=builder /app/models /app/models

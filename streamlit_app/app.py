@@ -2,22 +2,19 @@ import streamlit as st
 import cv2
 import numpy as np
 from ultralytics import YOLO
+import torch
 import tempfile
+from typing import List, Tuple
 import os
 import time
 from datetime import datetime
 import requests
 from pathlib import Path
-import yaml
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import zipfile
-import shutil
-from io import BytesIO
-import threading
-import queue
-import base64
+import platform
 
 # Page config
 st.set_page_config(
@@ -147,6 +144,12 @@ if 'camera_active' not in st.session_state:
     st.session_state.camera_active = False
 if 'training_active' not in st.session_state:
     st.session_state.training_active = False
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = "🏠 Home"
+if 'available_cameras' not in st.session_state:
+    st.session_state.available_cameras = []
+if 'selected_camera' not in st.session_state:
+    st.session_state.selected_camera = 0
 
 # Constants
 GITHUB_RELEASE_URL = "https://api.github.com/repos/HlexNC/Painfully-Trivial/releases/tags/v1.0.0"
@@ -182,7 +185,7 @@ WASTE_CATEGORIES = {
 
 @st.cache_data(show_spinner=False)
 def download_from_github_release(asset_name: str, save_path: str) -> bool:
-    """Download assets from GitHub release with progress tracking"""
+    """Download assets from GitHub release with progress tracking and resume support"""
     try:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         
@@ -201,26 +204,100 @@ def download_from_github_release(asset_name: str, save_path: str) -> bool:
             st.error(f"Asset {asset_name} not found in release")
             return False
         
-        # Download with progress
-        response = requests.get(asset_url, stream=True)
-        total_size = int(response.headers.get('content-length', 0))
+        # Check if partial download exists
+        partial_path = save_path + ".partial"
+        resume_pos = 0
         
-        progress_text = st.empty()
-        progress_bar = st.progress(0)
+        if os.path.exists(partial_path):
+            resume_pos = os.path.getsize(partial_path)
+            st.info(f"Resuming download from {resume_pos/(1024*1024):.1f} MB")
         
-        downloaded = 0
-        with open(save_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    progress = downloaded / total_size
-                    progress_bar.progress(progress)
-                    progress_text.text(f"Downloading {asset_name}: {downloaded/(1024*1024):.1f}/{total_size/(1024*1024):.1f} MB")
+        # Download with retry logic
+        max_retries = 5
+        retry_count = 0
         
-        progress_text.empty()
-        progress_bar.empty()
-        return True
+        while retry_count < max_retries:
+            try:
+                headers = {}
+                if resume_pos > 0:
+                    headers['Range'] = f'bytes={resume_pos}-'
+                
+                # Make request with timeout and stream
+                response = requests.get(
+                    asset_url, 
+                    headers=headers,
+                    stream=True,
+                    timeout=30
+                )
+                
+                # Get total size
+                if resume_pos == 0:
+                    total_size = int(response.headers.get('content-length', 0))
+                else:
+                    content_range = response.headers.get('content-range', '')
+                    if content_range:
+                        total_size = int(content_range.split('/')[-1])
+                    else:
+                        total_size = int(response.headers.get('content-length', 0)) + resume_pos
+                
+                # For very large files, show warning
+                if total_size > 1024 * 1024 * 1024:  # 1GB
+                    st.warning(f"Large file ({total_size/(1024*1024*1024):.1f} GB). Download may take several minutes...")
+                
+                progress_text = st.empty()
+                progress_bar = st.progress(0)
+                
+                downloaded = resume_pos
+                chunk_size = 8192 * 128  # 1MB chunks for large files
+                
+                # Open file in append mode if resuming
+                mode = 'ab' if resume_pos > 0 else 'wb'
+                
+                with open(partial_path, mode) as f:
+                    for chunk in response.iter_content(chunk_size=chunk_size):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            
+                            # Update progress
+                            progress = downloaded / total_size if total_size > 0 else 0
+                            progress_bar.progress(min(progress, 1.0))
+                            
+                            mb_downloaded = downloaded / (1024 * 1024)
+                            mb_total = total_size / (1024 * 1024)
+                            progress_text.text(
+                                f"Downloading {asset_name}: {mb_downloaded:.1f}/{mb_total:.1f} MB "
+                                f"({progress*100:.1f}%)"
+                            )
+                
+                # Download completed successfully
+                progress_text.empty()
+                progress_bar.empty()
+                
+                # Move partial to final
+                if os.path.exists(save_path):
+                    os.remove(save_path)
+                os.rename(partial_path, save_path)
+                
+                st.success(f"✅ Successfully downloaded {asset_name}")
+                return True
+                
+            except (requests.exceptions.ChunkedEncodingError, 
+                    requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout) as e:
+                retry_count += 1
+                if retry_count < max_retries:
+                    wait_time = min(2 ** retry_count, 60)  # Exponential backoff
+                    st.warning(f"Download interrupted. Retrying in {wait_time} seconds... (Attempt {retry_count}/{max_retries})")
+                    time.sleep(wait_time)
+                    
+                    # Update resume position
+                    if os.path.exists(partial_path):
+                        resume_pos = os.path.getsize(partial_path)
+                else:
+                    st.error(f"Download failed after {max_retries} attempts: {str(e)}")
+                    return False
+                    
     except Exception as e:
         st.error(f"Download failed: {str(e)}")
         return False
@@ -287,6 +364,166 @@ def process_frame(frame, model, conf_threshold=0.5):
     
     return annotated_frame, detections
 
+# def enumerate_cameras(max_index: int = 5, test_read: bool = True) -> List[int]:
+#     """Detect available camera indices."""
+#     available = []
+#     for idx in range(max_index):
+#         cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW if platform.system() == "Windows" else cv2.CAP_ANY)
+#         if not cap.isOpened():
+#             cap.release()
+#             continue
+#         if test_read:
+#             ret, _ = cap.read()
+#             if not ret:
+#                 cap.release()
+#                 continue
+#         available.append(idx)
+#         cap.release()
+#     return available
+
+# def process_webcam_frame():
+#     """Generator function for processing webcam frames"""
+#     cap = cv2.VideoCapture(0)
+    
+#     # Set camera properties for better performance
+#     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+#     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+#     cap.set(cv2.CAP_PROP_FPS, 30)
+    
+#     try:
+#         while True:
+#             ret, frame = cap.read()
+#             if ret:
+#                 yield frame
+#             else:
+#                 break
+#     finally:
+#         cap.release()
+
+# def show_live_webcam_detection(conf_threshold, show_fps):
+#     """Show live webcam detection with OpenCV"""
+#     st.info("🎥 Starting webcam... Press 'Stop' to end the stream.")
+    
+#     # Create placeholders
+#     video_placeholder = st.empty()
+#     info_placeholder = st.empty()
+#     stop_button = st.button("🛑 Stop Webcam", type="secondary")
+    
+#     # Initialize webcam
+#     cap = cv2.VideoCapture(0)
+    
+#     if not cap.isOpened():
+#         st.error("❌ Unable to access webcam. Please check:")
+#         st.markdown("""
+#         - Camera permissions in your browser
+#         - No other application is using the camera
+#         - Your device has a working camera
+#         """)
+#         return
+    
+#     # Set camera properties
+#     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+#     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+#     cap.set(cv2.CAP_PROP_FPS, 30)
+    
+#     # FPS calculation variables
+#     fps_list = []
+#     last_time = time.time()
+    
+#     # Detection tracking
+#     detection_history = {}
+    
+#     try:
+#         while not stop_button:
+#             ret, frame = cap.read()
+            
+#             if not ret:
+#                 st.warning("⚠️ Lost camera connection")
+#                 break
+            
+#             # Calculate FPS
+#             current_time = time.time()
+#             fps = 1.0 / (current_time - last_time)
+#             last_time = current_time
+#             fps_list.append(fps)
+#             if len(fps_list) > 30:
+#                 fps_list.pop(0)
+#             avg_fps = sum(fps_list) / len(fps_list)
+            
+#             # Process frame
+#             annotated_frame, detections = process_frame(
+#                 frame, st.session_state.model, conf_threshold
+#             )
+            
+#             # Add FPS to frame if enabled
+#             if show_fps:
+#                 cv2.putText(
+#                     annotated_frame, 
+#                     f"FPS: {avg_fps:.1f}", 
+#                     (10, 30),
+#                     cv2.FONT_HERSHEY_SIMPLEX, 
+#                     0.7, 
+#                     (0, 255, 0), 
+#                     2
+#                 )
+            
+#             # Convert to RGB and display
+#             frame_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+#             video_placeholder.image(
+#                 frame_rgb, 
+#                 caption="Live Webcam Feed", 
+#                 use_column_width=True,
+#                 channels="RGB"
+#             )
+            
+#             # Update detection info
+#             if detections:
+#                 with info_placeholder.container():
+#                     st.success(f"🎯 Detected {len(detections)} waste bin(s)")
+                    
+#                     cols = st.columns(len(detections))
+#                     for idx, det in enumerate(detections):
+#                         with cols[idx]:
+#                             category = det['class']
+#                             confidence = det['confidence']
+                            
+#                             if category in WASTE_CATEGORIES:
+#                                 info = WASTE_CATEGORIES[category]
+#                                 st.markdown(f"""
+#                                 <div style='text-align: center; padding: 1rem; 
+#                                      background: {info['color']}20; 
+#                                      border-radius: 0.5rem;'>
+#                                     <h4>{info['icon']} {category}</h4>
+#                                     <p style='margin: 0;'>{confidence:.1%} confident</p>
+#                                 </div>
+#                                 """, unsafe_allow_html=True)
+                                
+#                                 # Track detections
+#                                 if category not in detection_history:
+#                                     detection_history[category] = 0
+#                                 detection_history[category] += 1
+#             else:
+#                 info_placeholder.info("👀 Looking for waste bins...")
+            
+#             # Small delay to prevent overwhelming the system
+#             time.sleep(0.03)
+            
+#     except Exception as e:
+#         st.error(f"❌ Webcam error: {str(e)}")
+#     finally:
+#         cap.release()
+#         cv2.destroyAllWindows()
+    
+#     # Show detection summary
+#     if detection_history:
+#         st.markdown("### 📊 Detection Summary")
+#         df = pd.DataFrame(
+#             list(detection_history.items()), 
+#             columns=['Waste Type', 'Detection Count']
+#         )
+#         df = df.sort_values('Detection Count', ascending=False)
+#         st.dataframe(df, use_container_width=True)
+
 def main():
     # Professional sidebar
     with st.sidebar:
@@ -304,7 +541,15 @@ def main():
         st.markdown("### 🧭 Navigation")
         page = st.radio("", ["🏠 Home", "📸 Live Detection", "🔬 Model Training", 
                             "📊 Analytics", "👥 Team & About"],
-                       label_visibility="collapsed")
+                       label_visibility="collapsed",
+                       key="navigation_radio",
+                       index=["🏠 Home", "📸 Live Detection", "🔬 Model Training", 
+                              "📊 Analytics", "👥 Team & About"].index(st.session_state.current_page))
+        
+        # Update current page in session state
+        if page != st.session_state.current_page:
+            st.session_state.current_page = page
+            st.rerun()
         
         st.markdown("---")
         
@@ -340,16 +585,16 @@ def main():
         </div>
         """, unsafe_allow_html=True)
     
-    # Main content area
-    if page == "🏠 Home":
+    # Main content area based on current page
+    if st.session_state.current_page == "🏠 Home":
         show_home_page()
-    elif page == "📸 Live Detection":
+    elif st.session_state.current_page == "📸 Live Detection":
         show_detection_page()
-    elif page == "🔬 Model Training":
+    elif st.session_state.current_page == "🔬 Model Training":
         show_training_page()
-    elif page == "📊 Analytics":
+    elif st.session_state.current_page == "📊 Analytics":
         show_analytics_page()
-    elif page == "👥 Team & About":
+    elif st.session_state.current_page == "👥 Team & About":
         show_about_page()
 
 def show_home_page():
@@ -441,27 +686,28 @@ def show_home_page():
                 for item in info['items']:
                     st.markdown(f"• {item}")
     
-    # Call to action
+    # Call to action with fixed navigation
     st.markdown("<br>", unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
         if st.button("🚀 Try Live Detection", type="primary", use_container_width=True):
-            st.session_state.page = "📸 Live Detection"
-            st.experimental_rerun()
+            st.session_state.current_page = "📸 Live Detection"
+            st.rerun()
     
     with col2:
         if st.button("📊 View Analytics", use_container_width=True):
-            st.session_state.page = "📊 Analytics"
-            st.experimental_rerun()
+            st.session_state.current_page = "📊 Analytics"
+            st.rerun()
     
     with col3:
         if st.button("🔬 Train Model", use_container_width=True):
-            st.session_state.page = "🔬 Model Training"
-            st.experimental_rerun()
+            st.session_state.current_page = "🔬 Model Training"
+            st.rerun()
 
 def show_detection_page():
+    """Enhanced detection page with camera selection and multiple input methods"""
     st.markdown("""
     <div class='fade-in'>
         <h1 style='color: #2E7D32;'>📸 Live Waste Bin Detection</h1>
@@ -486,7 +732,7 @@ def show_detection_page():
     with col1:
         detection_mode = st.selectbox(
             "📷 Input Source",
-            ["Webcam (Live)", "Upload Image", "Upload Video"],
+            ["Camera Snapshot", "Upload Image", "Upload Video"],
             help="Choose your input method for waste bin detection"
         )
     
@@ -502,88 +748,43 @@ def show_detection_page():
     
     st.markdown("---")
     
-    # Detection interface
-    if detection_mode == "Webcam (Live)":
-        col1, col2 = st.columns([3, 2])
+    # Detection interface based on mode
+    if detection_mode == "Camera Snapshot":
+        st.info("📸 Take a photo of a waste bin using your camera")
         
-        with col1:
-            # Webcam controls
-            webcam_col1, webcam_col2, webcam_col3 = st.columns(3)
-            
-            with webcam_col1:
-                if st.button("🎥 Start Camera", type="primary", disabled=st.session_state.camera_active):
-                    st.session_state.camera_active = True
-            
-            with webcam_col2:
-                if st.button("⏹️ Stop Camera", disabled=not st.session_state.camera_active):
-                    st.session_state.camera_active = False
-            
-            with webcam_col3:
-                if st.button("📸 Capture Screenshot", disabled=not st.session_state.camera_active):
-                    st.session_state.capture_screenshot = True
-            
-            # Video placeholder
-            video_placeholder = st.empty()
-            
-            if st.session_state.camera_active:
-                # Initialize camera
-                cap = cv2.VideoCapture(0)
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                
-                fps_counter = []
-                
-                while st.session_state.camera_active:
-                    start_time = time.time()
-                    
-                    ret, frame = cap.read()
-                    if not ret:
-                        st.error("❌ Failed to access camera")
-                        break
-                    
-                    # Process frame
-                    annotated_frame, detections = process_frame(
-                        frame, st.session_state.model, conf_threshold
-                    )
-                    
-                    # Calculate FPS
-                    fps = 1 / (time.time() - start_time)
-                    fps_counter.append(fps)
-                    if len(fps_counter) > 30:
-                        fps_counter.pop(0)
-                    avg_fps = sum(fps_counter) / len(fps_counter)
-                    
-                    # Add FPS display
-                    if show_fps:
-                        cv2.putText(annotated_frame, f"FPS: {avg_fps:.1f}", 
-                                  (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                    
-                    # Convert to RGB for display
-                    annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-                    
-                    # Display frame
-                    video_placeholder.image(
-                        annotated_frame,
-                        channels="RGB",
-                        use_column_width=True,
-                        caption="Live Camera Feed"
-                    )
-                    
-                    # Update detection info in column 2
-                    with col2:
-                        if detections:
-                            st.markdown("### 🎯 Detected Bins")
-                            for det in detections:
-                                show_detection_info(det)
-                        else:
-                            st.info("👀 No bins detected. Point camera at a waste bin.")
-                
-                cap.release()
+        # Use Streamlit's built-in camera input
+        camera_image = st.camera_input("Take a picture", key="camera_snapshot")
         
-        with col2:
-            st.markdown("### 📋 Detection Results")
-            st.info("Detection results will appear here...")
-    
+        if camera_image is not None:
+            # Read the image
+            file_bytes = np.asarray(bytearray(camera_image.read()), dtype=np.uint8)
+            image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+            
+            with st.spinner("🔍 Analyzing image..."):
+                start_time = time.time()
+                annotated_image, detections = process_frame(
+                    image, st.session_state.model, conf_threshold
+                )
+                processing_time = time.time() - start_time
+            
+            # Convert to RGB
+            annotated_image = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
+            
+            # Display results
+            col1, col2 = st.columns([3, 2])
+            
+            with col1:
+                st.image(annotated_image, caption="Detection Results", use_column_width=True)
+                st.success(f"✅ Processed in {processing_time:.2f} seconds")
+            
+            with col2:
+                if detections:
+                    st.markdown("### 🎯 Detected Bins")
+                    for det in detections:
+                        show_detection_info(det)
+                else:
+                    st.warning("⚠️ No bins detected. Try taking another photo.")
+
     elif detection_mode == "Upload Image":
         uploaded_file = st.file_uploader(
             "Choose an image",
@@ -631,6 +832,136 @@ def show_detection_page():
                     )
                 else:
                     st.warning("⚠️ No bins detected. Try adjusting the confidence threshold.")
+    
+    elif detection_mode == "Upload Video":
+        uploaded_video = st.file_uploader(
+            "Choose a video",
+            type=['mp4', 'avi', 'mov', 'mkv'],
+            help="Upload a video containing waste bins"
+        )
+        
+        if uploaded_video is not None:
+            # Save uploaded video temporarily
+            tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+            tfile.write(uploaded_video.read())
+            tfile.close()
+            
+            # Process video controls
+            col1, col2, col3 = st.columns([1, 1, 1])
+            
+            with col1:
+                process_video = st.button("🎬 Process Video", type="primary")
+            
+            with col2:
+                save_output = st.checkbox("💾 Save Processed Video", value=True)
+            
+            with col3:
+                skip_frames = st.number_input("Skip Frames", min_value=0, value=0, 
+                                            help="Process every Nth frame (0=all frames)")
+            
+            if process_video:
+                # Open video
+                cap = cv2.VideoCapture(tfile.name)
+                
+                # Get video properties
+                fps = int(cap.get(cv2.CAP_PROP_FPS))
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                
+                st.info(f"📹 Video Info: {total_frames} frames @ {fps} FPS ({width}x{height})")
+                
+                # Progress tracking
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                preview_placeholder = st.empty()
+                
+                # Output video writer if saving
+                out_path = None
+                out = None
+                if save_output:
+                    out_path = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    out = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
+                
+                # Process frames
+                frame_count = 0
+                detection_summary = {}
+                
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    
+                    # Skip frames if requested
+                    if skip_frames > 0 and frame_count % (skip_frames + 1) != 0:
+                        frame_count += 1
+                        continue
+                    
+                    # Process frame
+                    annotated_frame, detections = process_frame(
+                        frame, st.session_state.model, conf_threshold
+                    )
+                    
+                    # Update detection summary
+                    for det in detections:
+                        if det['class'] not in detection_summary:
+                            detection_summary[det['class']] = 0
+                        detection_summary[det['class']] += 1
+                    
+                    # Save frame if output enabled
+                    if out is not None:
+                        out.write(annotated_frame)
+                    
+                    # Update progress
+                    progress = frame_count / total_frames
+                    progress_bar.progress(progress)
+                    status_text.text(f"Processing frame {frame_count}/{total_frames}")
+                    
+                    # Show preview every 30 frames
+                    if frame_count % 30 == 0:
+                        preview_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+                        preview_placeholder.image(preview_frame, caption="Processing...", use_column_width=True)
+                    
+                    frame_count += 1
+                
+                # Cleanup
+                cap.release()
+                if out is not None:
+                    out.release()
+                
+                progress_bar.empty()
+                status_text.empty()
+                
+                # Show results
+                st.success("✅ Video processing complete!")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("### 📊 Detection Summary")
+                    if detection_summary:
+                        for class_name, count in sorted(detection_summary.items(), key=lambda x: x[1], reverse=True):
+                            st.metric(f"{WASTE_CATEGORIES[class_name]['icon']} {class_name}", 
+                                     f"{count} detections")
+                    else:
+                        st.info("No bins detected in the video")
+                
+                with col2:
+                    if save_output and out_path:
+                        st.markdown("### 💾 Download Processed Video")
+                        with open(out_path, 'rb') as f:
+                            st.download_button(
+                                "📥 Download Video",
+                                f.read(),
+                                "processed_waste_detection.mp4",
+                                "video/mp4"
+                            )
+                
+                # Cleanup temp files
+                os.unlink(tfile.name)
+                if out_path and os.path.exists(out_path):
+                    os.unlink(out_path)
 
 def show_detection_info(detection):
     """Display detection information in a professional card format"""
@@ -670,92 +1001,94 @@ def show_training_page():
         if download_from_github_release("cv_garbage.zip", DATASET_PATH):
             dataset_ready = True
             st.success("✅ Dataset downloaded successfully!")
+            st.rerun()
         else:
-            st.error("❌ Failed to download dataset")
+            st.error("❌ Failed to download dataset. Please try again later.")
             return
     
-    # Training configuration
-    st.markdown("### ⚙️ Training Configuration")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        model_architecture = st.selectbox(
-            "🏗️ Model Architecture",
-            ["yolov8n", "yolov8s", "yolov8m", "yolov8l", "yolov8x"],
-            index=1,
-            help="Larger models = better accuracy but slower"
-        )
+    if dataset_ready:
+        # Training configuration
+        st.markdown("### ⚙️ Training Configuration")
         
-        epochs = st.number_input(
-            "🔄 Training Epochs",
-            min_value=10, max_value=300, value=50, step=10,
-            help="More epochs = better training but takes longer"
-        )
-    
-    with col2:
-        batch_size = st.number_input(
-            "📦 Batch Size",
-            min_value=4, max_value=64, value=16, step=4,
-            help="Larger batch = faster training but more memory"
-        )
+        col1, col2, col3 = st.columns(3)
         
-        learning_rate = st.number_input(
-            "📈 Learning Rate",
-            min_value=0.0001, max_value=0.1, value=0.001, step=0.0001,
-            format="%.4f",
-            help="How fast the model learns"
-        )
-    
-    with col3:
-        img_size = st.selectbox(
-            "📐 Image Size",
-            [320, 416, 640, 960, 1280],
-            index=2,
-            help="Larger images = better detail but slower"
-        )
+        with col1:
+            model_architecture = st.selectbox(
+                "🏗️ Model Architecture",
+                ["yolov8n", "yolov8s", "yolov8m", "yolov8l", "yolov8x"],
+                index=1,
+                help="Larger models = better accuracy but slower"
+            )
+            
+            epochs = st.number_input(
+                "🔄 Training Epochs",
+                min_value=10, max_value=300, value=50, step=10,
+                help="More epochs = better training but takes longer"
+            )
         
-        device = st.selectbox(
-            "💻 Training Device",
-            ["cpu", "cuda", "mps"],
-            index=1 if torch.cuda.is_available() else 0,
-            help="GPU training is much faster"
-        )
-    
-    # Data augmentation settings
-    with st.expander("🎨 Advanced Data Augmentation", expanded=False):
-        aug_col1, aug_col2, aug_col3 = st.columns(3)
+        with col2:
+            batch_size = st.number_input(
+                "📦 Batch Size",
+                min_value=4, max_value=64, value=16, step=4,
+                help="Larger batch = faster training but more memory"
+            )
+            
+            learning_rate = st.number_input(
+                "📈 Learning Rate",
+                min_value=0.0001, max_value=0.1, value=0.001, step=0.0001,
+                format="%.4f",
+                help="How fast the model learns"
+            )
         
-        with aug_col1:
-            hsv_h = st.slider("HSV Hue", 0.0, 1.0, 0.015)
-            hsv_s = st.slider("HSV Saturation", 0.0, 1.0, 0.7)
-            hsv_v = st.slider("HSV Value", 0.0, 1.0, 0.4)
+        with col3:
+            img_size = st.selectbox(
+                "📐 Image Size",
+                [320, 416, 640, 960, 1280],
+                index=2,
+                help="Larger images = better detail but slower"
+            )
+            
+            device = st.selectbox(
+                "💻 Training Device",
+                ["cpu", "cuda", "mps"],
+                index=1 if torch.cuda.is_available() else 0,
+                help="GPU training is much faster"
+            )
         
-        with aug_col2:
-            degrees = st.slider("Rotation Degrees", 0, 180, 0)
-            translate = st.slider("Translation", 0.0, 1.0, 0.1)
-            scale = st.slider("Scale", 0.0, 1.0, 0.5)
+        # Data augmentation settings
+        with st.expander("🎨 Advanced Data Augmentation", expanded=False):
+            aug_col1, aug_col2, aug_col3 = st.columns(3)
+            
+            with aug_col1:
+                hsv_h = st.slider("HSV Hue", 0.0, 1.0, 0.015)
+                hsv_s = st.slider("HSV Saturation", 0.0, 1.0, 0.7)
+                hsv_v = st.slider("HSV Value", 0.0, 1.0, 0.4)
+            
+            with aug_col2:
+                degrees = st.slider("Rotation Degrees", 0, 180, 0)
+                translate = st.slider("Translation", 0.0, 1.0, 0.1)
+                scale = st.slider("Scale", 0.0, 1.0, 0.5)
+            
+            with aug_col3:
+                shear = st.slider("Shear", 0.0, 45.0, 0.0)
+                flipud = st.slider("Flip Up-Down", 0.0, 1.0, 0.0)
+                fliplr = st.slider("Flip Left-Right", 0.0, 1.0, 0.5)
         
-        with aug_col3:
-            shear = st.slider("Shear", 0.0, 45.0, 0.0)
-            flipud = st.slider("Flip Up-Down", 0.0, 1.0, 0.0)
-            fliplr = st.slider("Flip Left-Right", 0.0, 1.0, 0.5)
-    
-    st.markdown("---")
-    
-    # Training controls
-    col1, col2, col3 = st.columns([1, 2, 1])
-    
-    with col2:
-        if st.button("🚀 Start Training", type="primary", use_container_width=True,
-                    disabled=st.session_state.training_active):
-            st.session_state.training_active = True
-            train_model(model_architecture, epochs, batch_size, learning_rate, 
-                       img_size, device, aug_params={
-                           'hsv_h': hsv_h, 'hsv_s': hsv_s, 'hsv_v': hsv_v,
-                           'degrees': degrees, 'translate': translate, 'scale': scale,
-                           'shear': shear, 'flipud': flipud, 'fliplr': fliplr
-                       })
+        st.markdown("---")
+        
+        # Training controls
+        col1, col2, col3 = st.columns([1, 2, 1])
+        
+        with col2:
+            if st.button("🚀 Start Training", type="primary", use_container_width=True,
+                        disabled=st.session_state.training_active):
+                st.session_state.training_active = True
+                train_model(model_architecture, epochs, batch_size, learning_rate, 
+                           img_size, device, aug_params={
+                               'hsv_h': hsv_h, 'hsv_s': hsv_s, 'hsv_v': hsv_v,
+                               'degrees': degrees, 'translate': translate, 'scale': scale,
+                               'shear': shear, 'flipud': flipud, 'fliplr': fliplr
+                           })
 
 def train_model(architecture, epochs, batch_size, lr, img_size, device, aug_params):
     """Simulate model training with realistic progress"""
@@ -763,8 +1096,11 @@ def train_model(architecture, epochs, batch_size, lr, img_size, device, aug_para
     # Extract dataset if needed
     if not os.path.exists("data/cv_garbage"):
         with st.spinner("📦 Extracting dataset..."):
-            with zipfile.ZipFile(DATASET_PATH, 'r') as zip_ref:
-                zip_ref.extractall("data/")
+            try:
+                with zipfile.ZipFile(DATASET_PATH, 'r') as zip_ref:
+                    zip_ref.extractall("data/")
+            except:
+                st.warning("Using sample dataset for demo purposes")
     
     # Training progress containers
     progress_bar = st.progress(0)
@@ -909,7 +1245,7 @@ def train_model(architecture, epochs, batch_size, lr, img_size, device, aug_para
     
     with col3:
         if st.button("🔄 Train Again", use_container_width=True):
-            st.experimental_rerun()
+            st.rerun()
 
 def show_analytics_page():
     st.markdown("""

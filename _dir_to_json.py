@@ -41,7 +41,10 @@ EXPLICIT_IGNORE_FOLDERS = {
     'images',
     'labels',
     'models',
-    'labeled'
+    'labeled',
+    # ".github",
+    # "docs",
+    # "ml_deutsche_bahn",
 }
 
 def parse_ignore_file(ignore_file_path):

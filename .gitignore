@@ -11,5 +11,5 @@ runs
 /cv_garbage/models
 /cv_garbage/results
 /cv_garbage/labeled  
-/output.json
+output.json
 streamlit_app/models/waste_detector_best.pt
