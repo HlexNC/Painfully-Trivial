@@ -152,10 +152,14 @@ jobs:
       security-events: write
 
     steps:
+      - name: 🔍 Extract SHA tag for Trivy
+        id: extract-sha-tag
+        run: echo "TRIVY_IMAGE_TAG=ghcr.io/hlexnc/waste-sorting-assistant:sha-${GITHUB_SHA::7}" >> $GITHUB_ENV
+
       - name: 🔍 Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ghcr.io/hlexnc/waste-sorting-assistant:sha-${{ github.sha }}
+          image-ref: ${{ env.TRIVY_IMAGE_TAG }}
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
