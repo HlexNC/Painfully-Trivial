@@ -1,29 +1,299 @@
-name: Build and Deploy
+name: Build, Test & Deploy to GHCR
 
 on:
   push:
+    branches: [main, dev]
+    paths:
+      - 'streamlit_app/**'
+      - '.github/workflows/deploy.yml'
+    tags:
+      - 'v*'
+  pull_request:
     branches: [main]
+    paths:
+      - 'streamlit_app/**'
   release:
-    types: [created]
+    types: [created, published]
+  workflow_dispatch:
+    inputs:
+      deploy_environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/waste-sorting-assistant
+  PYTHON_VERSION: '3.10'
 
 jobs:
-  build:
+  # Job 1: Code Quality & Tests
+  test-and-lint:
+    name: Test & Code Quality
     runs-on: ubuntu-latest
+    
     steps:
-      - uses: actions/checkout@v3
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-      
-      - name: Login to GHCR
-        uses: docker/login-action@v2
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
         with:
-          registry: ghcr.io
+          fetch-depth: 0
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r streamlit_app/requirements.txt
+          pip install pytest black flake8 mypy
+
+      - name: 🔍 Lint with flake8
+        run: |
+          flake8 streamlit_app/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 streamlit_app/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: 🎨 Format check with black
+        run: |
+          black streamlit_app/ --check --diff
+
+      # - name: 🧪 Run tests
+      #   run: |
+      #     pytest streamlit_app/tests/ -v --cov=streamlit_app --cov-report=xml || true
+
+      - name: 📊 Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+
+  # Job 2: Build and Push Docker Image
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: test-and-lint
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: 🏗️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:v0.12.0
+            network=host
+
+      - name: 🔐 Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Build and push
-        uses: docker/build-push-action@v4
+
+      - name: 🏷️ Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
         with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
+            type=raw,value={{date 'YYYYMMDD-HHmmss'}}
+
+      - name: 🔨 Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ./streamlit_app
+          file: ./streamlit_app/Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository }}:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=ghcr.io/hlexnc/waste-sorting-assistant:buildcache
+          cache-to: type=registry,ref=ghcr.io/hlexnc/waste-sorting-assistant:buildcache,mode=max
+          build-args: |
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+
+
+  # Job 3: Security Scanning
+  security-scan:
+    name: Security Vulnerability Scan
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+
+    steps:
+      - name: 🔍 Extract SHA tag for Trivy
+        id: extract-sha-tag
+        run: echo "TRIVY_IMAGE_TAG=ghcr.io/hlexnc/waste-sorting-assistant:sha-${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+      - name: 🔍 Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.TRIVY_IMAGE_TAG }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: 📤 Upload Trivy scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: 🛡️ Run Snyk vulnerability scanner
+        uses: snyk/actions/docker@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: ${{ needs.build-and-push.outputs.image-tag }}
+          args: --severity-threshold=high
+        continue-on-error: true
+
+  # Job 4: Deploy to Staging/Production
+  deploy:
+    name: Deploy Application
+    needs: [build-and-push, security-scan]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: ${{ github.event.inputs.deploy_environment || 'staging' }}
+      url: ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🚀 Deploy to Streamlit Cloud
+        id: deploy
+        env:
+          STREAMLIT_SHARE_EMAIL: ${{ secrets.STREAMLIT_SHARE_EMAIL }}
+          STREAMLIT_SHARE_TOKEN: ${{ secrets.STREAMLIT_SHARE_TOKEN }}
+        run: |
+          echo "Deploying to Streamlit Cloud..."
+          # Add actual deployment commands here
+          echo "url=https://waste-sorting-assistant.streamlit.app" >> $GITHUB_OUTPUT
+
+      - name: 📱 Deploy to Cloud Run (Optional)
+        if: github.event.inputs.deploy_environment == 'production'
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: waste-sorting-assistant
+          image: ${{ needs.build-and-push.outputs.image-tag }}
+          region: us-central1
+          env_vars: |
+            ENVIRONMENT=production
+            VERSION=${{ github.sha }}
+
+  # Job 5: Create Release
+  create-release:
+    name: Create GitHub Release
+    needs: [build-and-push, deploy]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 📝 Generate changelog
+        id: changelog
+        uses: mikepenz/release-changelog-builder-action@v4
+        with:
+          configuration: ".github/changelog-config.json"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🎉 Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          body: |
+            ## 🚀 Waste Sorting Assistant Release
+            
+            ### 🐳 Docker Image
+            ```bash
+            docker pull ${{ needs.build-and-push.outputs.image-tag }}
+            ```
+            
+            ### 📋 Changelog
+            ${{ steps.changelog.outputs.changelog }}
+            
+            ### 🔗 Links
+            - [Live Demo](https://waste-sorting-assistant.streamlit.app)
+            - [Documentation](https://github.com/${{ github.repository }}/wiki)
+            - [Report Issues](https://github.com/${{ github.repository }}/issues)
+          files: |
+            streamlit_app/models/*.pt
+            streamlit_app/data/*.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Job 6: Notification
+  notify:
+    name: Send Notifications
+    needs: [build-and-push, deploy]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: 📊 Summary
+        run: |
+          echo "## 📊 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: \`${{ needs.build-and-push.outputs.image-tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Digest**: \`${{ needs.build-and-push.outputs.image-digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🐳 Pull Command" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ▶️ Run Command" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "docker run -p 8501:8501 ${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      # - name: 💬 Slack Notification
+      #   if: vars.SLACK_WEBHOOK != ''
+      #   uses: 8398a7/action-slack@v3
+      #   with:
+      #     status: ${{ job.status }}
+      #     text: |
+      #       Deployment ${{ job.status == 'success' && 'succeeded' || 'failed' }}!
+      #       Image: ${{ needs.build-and-push.outputs.image-tag }}
+      #     webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

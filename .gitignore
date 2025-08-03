@@ -1,4 +1,5 @@
 .venv
+venv
 /DBtrainrides.csv
 /YOLO_Dataset
 yolov8s.pt
@@ -9,4 +10,6 @@ runs
 /cv_garbage/YOLO_Dataset
 /cv_garbage/models
 /cv_garbage/results
-/output.json
+/cv_garbage/labeled  
+output.json
+streamlit_app/models/waste_detector_best.pt

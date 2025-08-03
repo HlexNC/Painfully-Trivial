@@ -33,10 +33,18 @@ EXPLICIT_IGNORE_FOLDERS = {
     '.gitlab',
     'node_modules',
     '.venv',
+    'venv',
     '__pycache__',
     'build',
     '.pytest_cache',
-    '.ruff_cache'
+    '.ruff_cache',
+    'images',
+    'labels',
+    'models',
+    'labeled',
+    # ".github",
+    # "docs",
+    # "ml_deutsche_bahn",
 }
 
 def parse_ignore_file(ignore_file_path):
@@ -152,19 +160,29 @@ def is_in_submodule(file_path, submodule_paths):
 def dir_to_json(directory, submodules, ignore_submodules=False):
     """
     Walks through the directory structure and returns a nested dict representing the structure.
-    Ignores any folders or files named .git or .gitlab.
+    Records explicit ignore folders as empty dicts but does not traverse into them.
     """
     result = {}
     ignore_patterns = ['.git', '.git/*']  # Basic patterns for git metadata
     submodule_paths = [os.path.join(directory, submodule['path']) for submodule in submodules]
 
     for root, dirs, files in os.walk(directory):
-        # Remove ignored folders immediately from the directory walk
-        dirs[:] = [d for d in dirs if d not in EXPLICIT_IGNORE_FOLDERS]
-
         relative_root = os.path.relpath(root, directory)
         if relative_root == ".":
             relative_root = ""
+
+        # Navigate into the nested dictionary corresponding to the current directory
+        sub_result = result
+        if relative_root:
+            for part in relative_root.split(os.sep):
+                sub_result = sub_result.setdefault(part, {})
+
+        # Handle explicit ignore folders: record them and prevent descending into them
+        for d in list(dirs):
+            folder_relative_path = os.path.join(relative_root, d) if relative_root else d
+            if is_folder_ignored(folder_relative_path):
+                sub_result.setdefault(d, {})  # Record the folder name with an empty dict
+                dirs.remove(d)  # Prevent os.walk from traversing into it
 
         # Optionally ignore submodule directories without a README file
         if ignore_submodules and is_in_submodule(root, submodule_paths) and not any('README' in f for f in files):
@@ -173,20 +191,6 @@ def dir_to_json(directory, submodules, ignore_submodules=False):
         # Collect .gitignore patterns from the current directory
         gitignore_path = os.path.join(root, '.gitignore')
         ignore_patterns.extend(parse_gitignore(gitignore_path))
-
-        # Navigate into the nested dictionary corresponding to the current directory
-        sub_result = result
-        if relative_root:
-            for part in relative_root.split(os.sep):
-                sub_result = sub_result.setdefault(part, {})
-
-        # Process folders: record names and skip traversal into ignored folders (already removed)
-        for d in dirs:
-            folder_relative_path = os.path.join(relative_root, d) if relative_root else d
-            if is_folder_ignored(folder_relative_path):
-                sub_result.setdefault(d, {})  # Record the folder name with an empty dict
-                # Note: Already filtered out from dirs list
-                continue
 
         # Process files: Skip if the file is explicitly ignored or is named like an ignored folder (.git/.gitlab)
         for file in files:
