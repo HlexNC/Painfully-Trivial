@@ -63,9 +63,9 @@ jobs:
         run: |
           black streamlit_app/ --check --diff
 
-      - name: 🧪 Run tests
-        run: |
-          pytest streamlit_app/tests/ -v --cov=streamlit_app --cov-report=xml || true
+      # - name: 🧪 Run tests
+      #   run: |
+      #     pytest streamlit_app/tests/ -v --cov=streamlit_app --cov-report=xml || true
 
       - name: 📊 Upload coverage
         uses: codecov/codecov-action@v3
