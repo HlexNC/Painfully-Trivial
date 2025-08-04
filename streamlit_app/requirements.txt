@@ -1,16 +1,16 @@
 # Core Dependencies
-streamlit==1.31.0
+streamlit==1.37.0
 opencv-python-headless==4.9.0.80  # Headless for Docker
 ultralytics==8.1.0
 numpy==1.24.3
 pandas==2.0.3
 plotly==5.18.0
 pyyaml==6.0.1
-requests==2.31.0
-Pillow==10.2.0
+requests==2.32.4
+Pillow==10.3.0
 
 # PyTorch (CPU version for Docker, GPU version can be installed separately)
-torch==2.1.2
+torch==2.7.1
 torchvision==0.16.2
 
 # Additional UI components
@@ -28,8 +28,8 @@ asyncio==3.4.3
 # flake8==7.0.0
 
 # Security
-python-jose==3.3.0
-cryptography==41.0.7
+python-jose==3.4.0
+cryptography==44.0.1
 
 # Monitoring (optional)
 # prometheus-client==0.19.0
