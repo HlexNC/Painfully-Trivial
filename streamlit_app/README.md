@@ -12,6 +12,12 @@
   <img src="https://raw.githubusercontent.com/HlexNC/Painfully-Trivial/main/docs/img/app-demo.gif" alt="App Demo" width="800"/>
 </p>
 
+<p align="center">
+  <a href="https://waste-sorting-assistant.streamlit.app">
+    <img src="https://img.shields.io/badge/🚀_Live_Demo-Waste_Sorting_Assistant-FF4B4B?style=for-the-badge" alt="Live Demo">
+  </a>
+</p>
+
 ## 🌟 Key Features
 
 ### 🎥 **Real-Time Detection**

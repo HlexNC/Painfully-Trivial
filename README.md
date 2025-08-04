@@ -53,7 +53,7 @@
 ## 🌟 Live Demo
 
 <p align="center">
-  <a href="https://painfully-trivial.streamlit.app">
+  <a href="https://waste-sorting-assistant.streamlit.app">
     <img src="https://img.shields.io/badge/🚀_Live_Demo-Waste_Sorting_Assistant-FF4B4B?style=for-the-badge" alt="Live Demo">
   </a>
 </p>
