@@ -1,49 +1,49 @@
 # Core Dependencies
-streamlit==1.37.0
-opencv-python-headless==4.9.0.80  # Headless for Docker
-ultralytics==8.1.0
-numpy==1.24.3
-pandas==2.0.3
-plotly==5.18.0
-pyyaml==6.0.1
-requests==2.32.4
-Pillow==10.3.0
+streamlit
+opencv-python-headless  # Headless for Docker
+ultralytics
+numpy
+pandas
+plotly
+pyyaml
+requests
+Pillow
 
 # PyTorch (CPU version for Docker, GPU version can be installed separately)
-torch==2.5.1
-torchvision==0.20.1
+torch
+torchvision
 
 # Additional UI components
-streamlit-webrtc==0.47.1  # For camera access
-streamlit-aggrid==0.3.4  # For advanced tables
-streamlit-extras==0.3.6  # Additional components
+streamlit-webrtc>=0.9.0  # For camera access
+streamlit-aggrid         # For advanced tables
+streamlit-extras         # Additional components
 
 # Performance and optimization
-cachetools==5.3.2
-asyncio==3.4.3
+cachetools
+asyncio
 
 # Development tools (optional, comment out for production)
-# pytest==7.4.4
-# black==23.12.1
-# flake8==7.0.0
+# pytest
+# black
+# flake8
 
 # Security
-python-jose==3.4.0
-cryptography==44.0.1
+python-jose
+cryptography
 
 # Monitoring (optional)
-# prometheus-client==0.19.0
+# prometheus-client
 
 # Image processing
-scipy==1.11.4
-scikit-image==0.22.0
+scipy
+scikit-image
 
 # API support
-fastapi==0.108.0
-uvicorn==0.25.0
+fastapi
+uvicorn
 
 # Data validation
-pydantic==2.5.3
+pydantic
 
 # Environment management
-python-dotenv==1.0.0
+python-dotenv

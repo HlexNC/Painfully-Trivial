@@ -40,7 +40,7 @@ EXPLICIT_IGNORE_FOLDERS = {
     '.ruff_cache',
     'images',
     'labels',
-    'models',
+    # 'models',
     'labeled',
     # ".github",
     # "docs",

@@ -16,7 +16,8 @@ from datetime import datetime
 import threading
 import queue
 import av
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration, WebRtcMode
+from typing import List, Dict
+from streamlit_webrtc import WebRtcMode, webrtc_streamer, VideoTransformerBase
 import logging
 
 # Configure logging
@@ -160,6 +161,11 @@ if "detection_history" not in st.session_state:
     st.session_state.detection_history = []
 if "model_metrics" not in st.session_state:
     st.session_state.model_metrics = None
+if "confidence_threshold" not in st.session_state:
+    st.session_state.confidence_threshold = 0.5
+if "detection_enabled" not in st.session_state:
+    st.session_state.detection_enabled = True
+
 
 # Constants
 GITHUB_RELEASE_URL = (
@@ -167,11 +173,6 @@ GITHUB_RELEASE_URL = (
 )
 MODEL_PATH = "models/waste_detector_best.pt"
 DATASET_PATH = "data/cv_garbage.zip"
-
-# WebRTC configuration for STUN/TURN servers
-RTC_CONFIGURATION = RTCConfiguration(
-    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
-)
 
 WASTE_CATEGORIES = {
     "Biomüll": {
@@ -209,9 +210,9 @@ WASTE_CATEGORIES = {
 
 # Video transformer for real-time processing
 class WasteDetectionTransformer(VideoTransformerBase):
-    def __init__(self):
-        self.model = st.session_state.model
-        self.confidence_threshold = 0.5
+    def __init__(self, model=None, conf_threshold=0.5):
+        self.model = model
+        self.confidence_threshold = conf_threshold
         self.frame_count = 0
         self.detection_queue = queue.Queue(maxsize=100)
         
@@ -501,6 +502,48 @@ def process_frame(frame, model, conf_threshold=0.5):
     return annotated_frame, detections
 
 
+# # Thread-safe queue for detections produced by the callback
+# detection_q: "queue.Queue[List[Dict]]" = queue.Queue(maxsize=128)
+
+
+# class VideoProcessor:
+#     def __init__(self, model=None, conf_threshold=0.5):
+#         # Model will be pulled from st.session_state only once, on first frame
+#         self.model = model
+#         self.conf_threshold = conf_threshold
+
+#     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+#         img = frame.to_ndarray(format="bgr24")
+
+#         # Lazy-load model and threshold
+#         if self.model is None:
+#             # Note: this runs in secondary thread, but st.session_state.model was set on main thread
+#             if self.model is None:
+#                 # If model still not loaded, just pass frames through
+#                 return frame
+
+#         # Process frame
+#         annotated_img, detections = process_frame(
+#             img,
+#             self.model,
+#             conf_threshold=self.conf_threshold
+#         )
+
+#         # (Optional) collect stats for main thread
+#         timestamp = datetime.now()
+#         for d in detections:
+#             try:
+#                 detection_q.put_nowait({
+#                     "timestamp": timestamp,
+#                     "class": d["class"],
+#                     "confidence": float(d["confidence"]),
+#                 })
+#             except queue.Full:
+#                 pass
+
+#         return av.VideoFrame.from_ndarray(annotated_img, format="bgr24")
+
+
 def main():
     # Professional sidebar
     with st.sidebar:
@@ -520,7 +563,7 @@ def main():
         # Navigation with icons
         st.markdown("### 🧭 Navigation")
         page = st.radio(
-            "",
+            "Navigation",
             [
                 "🏠 Home",
                 "📸 Live Detection",
@@ -773,25 +816,34 @@ def show_detection_page():
             0.05,
             help="Higher values = more confident detections",
         )
+        st.session_state.confidence_threshold = conf_threshold
 
     with col3:
-        show_fps = st.checkbox("Show FPS", value=True)
+        detection_toggle = st.checkbox("Enable Detection", value=True)
+        st.session_state.detection_enabled = detection_toggle
 
     st.markdown("---")
 
     # Detection interface based on mode
     if detection_mode == "Live Webcam":
-        st.info("🎥 Live webcam streaming - Grant camera permissions when prompted")
-        
+        st.info("🎥 Live webcam streaming - grant camera permissions when prompted")
         # Detection stats container
         stats_container = st.container()
         
+        # Ensure model is loaded
+        model = st.session_state.model
+        conf_threshold = st.session_state.confidence_threshold
+
         # Create video transformer instance
-        ctx = webrtc_streamer(
+        webrtc_ctx = webrtc_streamer(
             key="waste-detection",
             mode=WebRtcMode.SENDRECV,
-            rtc_configuration=RTC_CONFIGURATION,
-            video_transformer_factory=WasteDetectionTransformer,
+            # disable all ICE/STUN servers so we stay entirely local
+            rtc_configuration={"iceServers": []},
+            video_transformer_factory=lambda: WasteDetectionTransformer(
+                model=model,
+                conf_threshold=conf_threshold,
+            ),
             media_stream_constraints={
                 "video": {
                     "width": {"min": 640, "ideal": 1280, "max": 1920},
@@ -801,25 +853,25 @@ def show_detection_page():
             },
             async_processing=True,
         )
-        
+
         # Update transformer settings
-        if ctx.video_transformer:
-            ctx.video_transformer.confidence_threshold = conf_threshold
+        if webrtc_ctx.video_transformer:
+            webrtc_ctx.video_transformer.confidence_threshold = conf_threshold
             st.session_state.camera_active = True
         else:
             st.session_state.camera_active = False
-        
-        # Display real-time detection statistics
-        if ctx.state.playing:
+        # st.session_state.camera_active = webrtc_ctx.state.playing
+
+        if webrtc_ctx.state.playing:
             with stats_container:
                 st.markdown("### 📊 Live Detection Statistics")
                 
                 # Get detections from transformer queue
-                if ctx.video_transformer:
+                if webrtc_ctx.video_transformer:
                     recent_detections = []
-                    while not ctx.video_transformer.detection_queue.empty():
+                    while not webrtc_ctx.video_transformer.detection_queue.empty():
                         try:
-                            detection = ctx.video_transformer.detection_queue.get_nowait()
+                            detection = webrtc_ctx.video_transformer.detection_queue.get_nowait()
                             recent_detections.append(detection)
                             st.session_state.detection_history.append(detection)
                         except queue.Empty:
@@ -838,6 +890,40 @@ def show_detection_page():
                                         f"{WASTE_CATEGORIES[category]['icon']} {category}",
                                         f"{count} detections"
                                     )
+
+
+            # recent = []
+            # try:
+            #     while True:
+            #         recent.extend(detection_q.get_nowait())
+            # except queue.Empty:
+            #     pass
+
+            # if recent:
+            #     # Keep rolling history (safe to write on main thread)
+            #     st.session_state.detection_history.extend(recent)
+
+            # # Summarize the last 10 seconds
+            # now = datetime.now()
+            # window = [
+            #     d for d in st.session_state.detection_history
+            #     if (now - d["timestamp"]).total_seconds() <= 10
+            # ]
+
+            # if window:
+            #     counts = {}
+            #     for d in window:
+            #         counts[d["class"]] = counts.get(d["class"], 0) + 1
+
+            #     cols = st.columns(len(WASTE_CATEGORIES))
+            #     for i, category in enumerate(WASTE_CATEGORIES.keys()):
+            #         with cols[i]:
+            #             st.metric(
+            #                 f"{WASTE_CATEGORIES[category]['icon']} {category}",
+            #                 f"{counts.get(category, 0)} detections",
+            #             )
+            # else:
+            #     st.info("👀 Looking for waste bins...")
         
         # Camera tips
         with st.expander("📹 Camera Tips", expanded=False):
@@ -845,7 +931,8 @@ def show_detection_page():
             - **Lighting**: Ensure good lighting for better detection
             - **Distance**: Keep bins at 1-2 meters distance
             - **Angle**: Face the bin directly for best results
-            - **Multiple cameras**: Use browser settings to select different cameras
+            - **Browser**: Chrome or Edge recommended for best compatibility
+            - **Permissions**: Allow camera access when prompted
             """)
 
     elif detection_mode == "Camera Snapshot":
