@@ -1722,31 +1722,22 @@ def show_about_page():
 
     for idx, member in enumerate(team_members):
         with cols[idx]:
+            st.markdown(f"#### {member['name']}")
+            st.markdown(f"*{member['role']}*")
+
+            st.markdown("**Key Contributions:**")
+            for contrib in member['contributions']:
+                st.markdown(f"- {contrib}")
+
+            st.markdown("**Skills:**")
             st.markdown(
-                f"""
-            <div style='background: white; padding: 1.5rem; border-radius: 1rem; 
-                        box-shadow: 0 4px 6px rgba(0,0,0,0.1); height: 100%;'>
-                <h4 style='color: #2E7D32; margin-bottom: 0.5rem;'>{member['name']}</h4>
-                <p style='color: #666; font-size: 0.9rem; margin-bottom: 1rem;'>{member['role']}</p>
-                
-                <p style='font-weight: 600; margin-bottom: 0.5rem;'>Key Contributions:</p>
-                <ul style='font-size: 0.9rem; color: #555;'>
-                    {''.join(f"<li>{contrib}</li>" for contrib in member['contributions'])}
-                </ul>
-                
-                <p style='font-weight: 600; margin-top: 1rem; margin-bottom: 0.5rem;'>Skills:</p>
-                <div style='display: flex; flex-wrap: wrap; gap: 0.5rem;'>
-                    {''.join(f'<span style="background: #e3f2fd; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.8rem;">{skill}</span>' for skill in member['skills'])}
-                </div>
-                
-                <div style='margin-top: 1.5rem; display: flex; gap: 1rem;'>
-                    <a href='https://github.com/{member["github"]}' target='_blank' style='text-decoration: none;'>
-                        <img src='https://img.shields.io/badge/GitHub-Profile-181717?style=for-the-badge&logo=github' />
-                    </a>
-                </div>
-            </div>
-            """,
-                unsafe_allow_html=True,
+                " ".join(
+                    [f"`{skill}`" for skill in member['skills']]
+                )
+            )
+
+            st.markdown(
+                f"[![GitHub](https://img.shields.io/badge/GitHub-Profile-181717?style=for-the-badge&logo=github)](https://github.com/{member['github']})"
             )
 
     st.markdown("---")
