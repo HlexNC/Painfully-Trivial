@@ -11,12 +11,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import zipfile
-import json
 from datetime import datetime
-import threading
 import queue
 import av
-from typing import List, Dict
 from streamlit_webrtc import WebRtcMode, webrtc_streamer, VideoTransformerBase
 import logging
 
@@ -35,9 +32,9 @@ st.set_page_config(
         "Report a bug": "https://github.com/HlexNC/Painfully-Trivial/issues/new",
         "About": """
         # Deggendorf Waste Sorting Assistant
-        
+
         An AI-powered solution for proper waste disposal in Germany.
-        
+
         Developed by Team Painfully Trivial at TH Deggendorf.
         """,
     },
@@ -58,17 +55,17 @@ st.markdown(
         margin-bottom: 1rem;
         font-family: 'Inter', sans-serif;
     }
-    
+
     /* Subtle animations */
     @keyframes fadeIn {
         from { opacity: 0; transform: translateY(20px); }
         to { opacity: 1; transform: translateY(0); }
     }
-    
+
     .fade-in {
         animation: fadeIn 0.5s ease-out;
     }
-    
+
     /* Professional metric cards */
     .metric-card {
         background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
@@ -78,12 +75,12 @@ st.markdown(
         text-align: center;
         transition: transform 0.3s ease;
     }
-    
+
     .metric-card:hover {
         transform: translateY(-5px);
         box-shadow: 0 8px 12px rgba(0, 0, 0, 0.15);
     }
-    
+
     /* Detection info cards */
     .detection-card {
         background: white;
@@ -94,11 +91,11 @@ st.markdown(
         margin: 1rem 0;
         transition: all 0.3s ease;
     }
-    
+
     .detection-card:hover {
         box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
     }
-    
+
     /* Professional buttons */
     .stButton > button {
         background: linear-gradient(135deg, #2E7D32 0%, #45B7D1 100%);
@@ -109,24 +106,24 @@ st.markdown(
         border-radius: 0.5rem;
         transition: all 0.3s ease;
     }
-    
+
     .stButton > button:hover {
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(46, 125, 50, 0.3);
     }
-    
+
     /* Video feed styling */
     .video-container {
         border-radius: 1rem;
         overflow: hidden;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
     }
-    
+
     /* Professional sidebar */
     .css-1d391kg {
         background: linear-gradient(180deg, #f8f9fa 0%, #e9ecef 100%);
     }
-    
+
     /* Status indicators */
     .status-indicator {
         display: inline-block;
@@ -135,7 +132,7 @@ st.markdown(
         border-radius: 50%;
         margin-right: 5px;
     }
-    
+
     .status-active { background-color: #4CAF50; }
     .status-inactive { background-color: #f44336; }
     .status-processing { background-color: #ff9800; }
@@ -189,19 +186,31 @@ WASTE_CATEGORIES = {
     },
     "Glas": {
         "color": "#4ECDC4",
-        "items": ["Glass bottles", "Glass jars", "Drinking glasses (no ceramics!)"],
+        "items": [
+            "Glass bottles",
+            "Glass jars",
+            "Drinking glasses (no ceramics!)"],
         "icon": "🍾",
         "description": "Glass containers, sorted by color",
     },
     "Papier": {
         "color": "#45B7D1",
-        "items": ["Newspapers", "Magazines", "Cardboard", "Paper bags", "Books"],
+        "items": [
+            "Newspapers",
+            "Magazines",
+            "Cardboard",
+            "Paper bags",
+            "Books"],
         "icon": "📰",
         "description": "Paper and cardboard products",
     },
     "Restmüll": {
         "color": "#96CEB4",
-        "items": ["Cigarette butts", "Diapers", "Used tissues", "Broken ceramics"],
+        "items": [
+            "Cigarette butts",
+            "Diapers",
+            "Used tissues",
+            "Broken ceramics"],
         "icon": "🗑️",
         "description": "Non-recyclable general waste",
     },
@@ -215,15 +224,16 @@ class WasteDetectionTransformer(VideoTransformerBase):
         self.confidence_threshold = conf_threshold
         self.frame_count = 0
         self.detection_queue = queue.Queue(maxsize=100)
-        
+
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
-        
+
         # Process every 3rd frame for performance
         self.frame_count += 1
         if self.frame_count % 3 == 0 and self.model:
-            results = self.model(img, conf=self.confidence_threshold, verbose=False)
-            
+            results = self.model(
+                img, conf=self.confidence_threshold, verbose=False)
+
             for r in results:
                 boxes = r.boxes
                 if boxes is not None:
@@ -231,17 +241,17 @@ class WasteDetectionTransformer(VideoTransformerBase):
                         x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                         cls = int(box.cls[0])
                         conf = float(box.conf[0])
-                        
+
                         # Get class name
                         class_name = self.model.names[cls]
-                        
+
                         if class_name in WASTE_CATEGORIES:
                             # Draw bounding box
                             color = WASTE_CATEGORIES[class_name]["color"]
                             color_rgb = tuple(
-                                int(color.lstrip("#")[i : i + 2], 16) for i in (4, 2, 0)
+                                int(color.lstrip("#")[i: i + 2], 16) for i in (4, 2, 0)
                             )
-                            
+
                             cv2.rectangle(
                                 img,
                                 (int(x1), int(y1)),
@@ -249,13 +259,13 @@ class WasteDetectionTransformer(VideoTransformerBase):
                                 color_rgb,
                                 3,
                             )
-                            
+
                             # Add label
                             label = f"{WASTE_CATEGORIES[class_name]['icon']} {class_name} {conf:.2f}"
                             label_size, _ = cv2.getTextSize(
                                 label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2
                             )
-                            
+
                             cv2.rectangle(
                                 img,
                                 (int(x1), int(y1) - label_size[1] - 10),
@@ -263,7 +273,7 @@ class WasteDetectionTransformer(VideoTransformerBase):
                                 color_rgb,
                                 -1,
                             )
-                            
+
                             cv2.putText(
                                 img,
                                 label,
@@ -273,17 +283,19 @@ class WasteDetectionTransformer(VideoTransformerBase):
                                 (255, 255, 255),
                                 2,
                             )
-                            
+
                             # Store detection
                             try:
-                                self.detection_queue.put_nowait({
-                                    "timestamp": datetime.now(),
-                                    "class": class_name,
-                                    "confidence": conf
-                                })
+                                self.detection_queue.put_nowait(
+                                    {
+                                        "timestamp": datetime.now(),
+                                        "class": class_name,
+                                        "confidence": conf,
+                                    }
+                                )
                             except queue.Full:
                                 pass
-        
+
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 
@@ -314,7 +326,8 @@ def download_from_github_release(asset_name: str, save_path: str) -> bool:
 
         if os.path.exists(partial_path):
             resume_pos = os.path.getsize(partial_path)
-            st.info(f"Resuming download from {resume_pos/(1024*1024):.1f} MB")
+            st.info(
+                f"Resuming download from {resume_pos / (1024 * 1024):.1f} MB")
 
         # Download with retry logic
         max_retries = 5
@@ -339,14 +352,13 @@ def download_from_github_release(asset_name: str, save_path: str) -> bool:
                     if content_range:
                         total_size = int(content_range.split("/")[-1])
                     else:
-                        total_size = (
-                            int(response.headers.get("content-length", 0)) + resume_pos
-                        )
+                        total_size = (int(response.headers.get(
+                            "content-length", 0)) + resume_pos)
 
                 # For very large files, show warning
                 if total_size > 1024 * 1024 * 1024:  # 1GB
                     st.warning(
-                        f"Large file ({total_size/(1024*1024*1024):.1f} GB). Download may take several minutes..."
+                        f"Large file ({total_size / (1024 * 1024 * 1024):.1f} GB). Download may take several minutes..."
                     )
 
                 progress_text = st.empty()
@@ -372,7 +384,7 @@ def download_from_github_release(asset_name: str, save_path: str) -> bool:
                             mb_total = total_size / (1024 * 1024)
                             progress_text.text(
                                 f"Downloading {asset_name}: {mb_downloaded:.1f}/{mb_total:.1f} MB "
-                                f"({progress*100:.1f}%)"
+                                f"({progress * 100:.1f}%)"
                             )
 
                 # Download completed successfully
@@ -396,15 +408,15 @@ def download_from_github_release(asset_name: str, save_path: str) -> bool:
                 if retry_count < max_retries:
                     wait_time = min(2**retry_count, 60)  # Exponential backoff
                     st.warning(
-                        f"Download interrupted. Retrying in {wait_time} seconds... (Attempt {retry_count}/{max_retries})"
-                    )
+                        f"Download interrupted. Retrying in {wait_time} seconds... (Attempt {retry_count}/{max_retries})")
                     time.sleep(wait_time)
 
                     # Update resume position
                     if os.path.exists(partial_path):
                         resume_pos = os.path.getsize(partial_path)
                 else:
-                    st.error(f"Download failed after {max_retries} attempts: {str(e)}")
+                    st.error(
+                        f"Download failed after {max_retries} attempts: {str(e)}")
                     return False
 
     except Exception as e:
@@ -417,17 +429,18 @@ def load_model():
     """Load YOLO model with automatic download from GitHub release"""
     if not os.path.exists(MODEL_PATH):
         with st.spinner("🚀 Downloading model from GitHub release..."):
-            if not download_from_github_release("waste_detector_best.pt", MODEL_PATH):
+            if not download_from_github_release(
+                    "waste_detector_best.pt", MODEL_PATH):
                 st.error("Failed to download model")
                 return None
 
     model = YOLO(MODEL_PATH)
-    
+
     # Extract real metrics if available
-    if hasattr(model, 'ckpt') and model.ckpt is not None:
-        metrics = model.ckpt.get('training_results', {})
+    if hasattr(model, "ckpt") and model.ckpt is not None:
+        metrics = model.ckpt.get("training_results", {})
         st.session_state.model_metrics = metrics
-    
+
     return model
 
 
@@ -453,7 +466,7 @@ def process_frame(frame, model, conf_threshold=0.5):
                     # Draw bounding box
                     color = WASTE_CATEGORIES[class_name]["color"]
                     color_rgb = tuple(
-                        int(color.lstrip("#")[i : i + 2], 16) for i in (4, 2, 0)
+                        int(color.lstrip("#")[i: i + 2], 16) for i in (4, 2, 0)
                     )
 
                     # Draw box with rounded corners effect
@@ -714,22 +727,22 @@ def show_home_page():
         st.markdown(
             """
         ### 🎯 The Challenge
-        
-        International students and new residents in Germany face significant challenges with the 
-        waste sorting system. The color-coded bins, German labeling, and strict sorting rules 
+
+        International students and new residents in Germany face significant challenges with the
+        waste sorting system. The color-coded bins, German labeling, and strict sorting rules
         create barriers to proper waste disposal.
-        
+
         ### 💡 Our AI Solution
-        
+
         Using state-of-the-art **YOLOv8** computer vision technology, our system:
         - 🎥 **Instantly identifies** waste bins through camera feed
         - 🌍 **Provides multilingual** disposal instructions
         - 📱 **Works on any device** with a camera
         - 🚀 **Processes in real-time** for immediate feedback
-        
+
         ### 🏆 Recognition
-        
-        This project was **successfully graded** at TH Deggendorf and represents cutting-edge 
+
+        This project was **successfully graded** at TH Deggendorf and represents cutting-edge
         application of AI in solving real-world problems.
         """
         )
@@ -759,7 +772,10 @@ def show_home_page():
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        if st.button("🚀 Try Live Detection", type="primary", use_container_width=True):
+        if st.button(
+            "🚀 Try Live Detection",
+            type="primary",
+                use_container_width=True):
             st.session_state.current_page = "📸 Live Detection"
             st.rerun()
 
@@ -829,7 +845,7 @@ def show_detection_page():
         st.info("🎥 Live webcam streaming - grant camera permissions when prompted")
         # Detection stats container
         stats_container = st.container()
-        
+
         # Ensure model is loaded
         model = st.session_state.model
         conf_threshold = st.session_state.confidence_threshold
@@ -865,32 +881,35 @@ def show_detection_page():
         if webrtc_ctx.state.playing:
             with stats_container:
                 st.markdown("### 📊 Live Detection Statistics")
-                
+
                 # Get detections from transformer queue
                 if webrtc_ctx.video_transformer:
                     recent_detections = []
                     while not webrtc_ctx.video_transformer.detection_queue.empty():
                         try:
-                            detection = webrtc_ctx.video_transformer.detection_queue.get_nowait()
+                            detection = (
+                                webrtc_ctx.video_transformer.detection_queue.get_nowait())
                             recent_detections.append(detection)
-                            st.session_state.detection_history.append(detection)
+                            st.session_state.detection_history.append(
+                                detection)
                         except queue.Empty:
                             break
-                    
+
                     # Show recent detections
                     if recent_detections:
                         df = pd.DataFrame(recent_detections)
-                        detection_counts = df['class'].value_counts()
-                        
+                        detection_counts = df["class"].value_counts()
+
                         cols = st.columns(len(WASTE_CATEGORIES))
-                        for idx, (category, count) in enumerate(detection_counts.items()):
+                        for idx, (category, count) in enumerate(
+                            detection_counts.items()
+                        ):
                             if category in WASTE_CATEGORIES:
                                 with cols[idx]:
                                     st.metric(
                                         f"{WASTE_CATEGORIES[category]['icon']} {category}",
-                                        f"{count} detections"
+                                        f"{count} detections",
                                     )
-
 
             # recent = []
             # try:
@@ -924,16 +943,18 @@ def show_detection_page():
             #             )
             # else:
             #     st.info("👀 Looking for waste bins...")
-        
+
         # Camera tips
         with st.expander("📹 Camera Tips", expanded=False):
-            st.markdown("""
+            st.markdown(
+                """
             - **Lighting**: Ensure good lighting for better detection
             - **Distance**: Keep bins at 1-2 meters distance
             - **Angle**: Face the bin directly for best results
             - **Browser**: Chrome or Edge recommended for best compatibility
             - **Permissions**: Allow camera access when prompted
-            """)
+            """
+            )
 
     elif detection_mode == "Camera Snapshot":
         st.info("📸 Take a photo of a waste bin using your camera")
@@ -943,7 +964,10 @@ def show_detection_page():
 
         if camera_image is not None:
             # Read the image
-            file_bytes = np.asarray(bytearray(camera_image.read()), dtype=np.uint8)
+            file_bytes = np.asarray(
+                bytearray(
+                    camera_image.read()),
+                dtype=np.uint8)
             image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
             with st.spinner("🔍 Analyzing image..."):
@@ -961,8 +985,9 @@ def show_detection_page():
 
             with col1:
                 st.image(
-                    annotated_image, caption="Detection Results", use_column_width=True
-                )
+                    annotated_image,
+                    caption="Detection Results",
+                    use_column_width=True)
                 st.success(f"✅ Processed in {processing_time:.2f} seconds")
 
             with col2:
@@ -971,7 +996,8 @@ def show_detection_page():
                     for det in detections:
                         show_detection_info(det)
                 else:
-                    st.warning("⚠️ No bins detected. Try taking another photo.")
+                    st.warning(
+                        "⚠️ No bins detected. Try taking another photo.")
 
     elif detection_mode == "Upload Image":
         uploaded_file = st.file_uploader(
@@ -982,7 +1008,10 @@ def show_detection_page():
 
         if uploaded_file is not None:
             # Read and process image
-            file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+            file_bytes = np.asarray(
+                bytearray(
+                    uploaded_file.read()),
+                dtype=np.uint8)
             image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
             with st.spinner("🔍 Analyzing image..."):
@@ -1000,8 +1029,9 @@ def show_detection_page():
 
             with col1:
                 st.image(
-                    annotated_image, caption="Detection Results", use_column_width=True
-                )
+                    annotated_image,
+                    caption="Detection Results",
+                    use_column_width=True)
                 st.success(f"✅ Processed in {processing_time:.2f} seconds")
 
             with col2:
@@ -1066,8 +1096,7 @@ def show_detection_page():
                 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
                 st.info(
-                    f"📹 Video Info: {total_frames} frames @ {fps} FPS ({width}x{height})"
-                )
+                    f"📹 Video Info: {total_frames} frames @ {fps} FPS ({width}x{height})")
 
                 # Progress tracking
                 progress_bar = st.progress(0)
@@ -1082,7 +1111,8 @@ def show_detection_page():
                         delete=False, suffix=".mp4"
                     ).name
                     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                    out = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
+                    out = cv2.VideoWriter(
+                        out_path, fourcc, fps, (width, height))
 
                 # Process frames
                 frame_count = 0
@@ -1094,7 +1124,8 @@ def show_detection_page():
                         break
 
                     # Skip frames if requested
-                    if skip_frames > 0 and frame_count % (skip_frames + 1) != 0:
+                    if skip_frames > 0 and frame_count % (
+                            skip_frames + 1) != 0:
                         frame_count += 1
                         continue
 
@@ -1116,11 +1147,13 @@ def show_detection_page():
                     # Update progress
                     progress = frame_count / total_frames
                     progress_bar.progress(progress)
-                    status_text.text(f"Processing frame {frame_count}/{total_frames}")
+                    status_text.text(
+                        f"Processing frame {frame_count}/{total_frames}")
 
                     # Show preview every 30 frames
                     if frame_count % 30 == 0:
-                        preview_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+                        preview_frame = cv2.cvtColor(
+                            annotated_frame, cv2.COLOR_BGR2RGB)
                         preview_placeholder.image(
                             preview_frame,
                             caption="Processing...",
@@ -1146,8 +1179,7 @@ def show_detection_page():
                     st.markdown("### 📊 Detection Summary")
                     if detection_summary:
                         for class_name, count in sorted(
-                            detection_summary.items(), key=lambda x: x[1], reverse=True
-                        ):
+                                detection_summary.items(), key=lambda x: x[1], reverse=True):
                             st.metric(
                                 f"{WASTE_CATEGORIES[class_name]['icon']} {class_name}",
                                 f"{count} detections",
@@ -1210,7 +1242,8 @@ def show_training_page():
     )
 
     # Check if dataset exists
-    dataset_ready = os.path.exists(DATASET_PATH) and zipfile.is_zipfile(DATASET_PATH)
+    dataset_ready = os.path.exists(
+        DATASET_PATH) and zipfile.is_zipfile(DATASET_PATH)
 
     if not dataset_ready:
         st.info("📦 Dataset required for training. Downloading from GitHub release...")
@@ -1333,7 +1366,9 @@ def show_training_page():
                 )
 
 
-def train_model_real(architecture, epochs, batch_size, lr, img_size, device, aug_params):
+def train_model_real(
+    architecture, epochs, batch_size, lr, img_size, device, aug_params
+):
     """Real model training with YOLO"""
 
     # Extract dataset if needed
@@ -1363,12 +1398,13 @@ def train_model_real(architecture, epochs, batch_size, lr, img_size, device, aug
 
     # Initialize model
     model = YOLO(f"{architecture}.pt")
-    
+
     # For quick demo, we'll train for fewer epochs if > 10
     actual_epochs = min(epochs, 5) if epochs > 10 else epochs
-    
+
     if epochs > 10:
-        st.warning(f"⚡ Training {actual_epochs} epochs for demo (requested: {epochs})")
+        st.warning(
+            f"⚡ Training {actual_epochs} epochs for demo (requested: {epochs})")
 
     try:
         # Create a training thread to avoid blocking
@@ -1400,7 +1436,7 @@ def train_model_real(architecture, epochs, batch_size, lr, img_size, device, aug
         # Start training
         with status_container:
             st.info("🏃 Training in progress... This may take several minutes.")
-            
+
         # For demo purposes, show simulated progress
         training_history = {
             "epoch": [],
@@ -1411,12 +1447,12 @@ def train_model_real(architecture, epochs, batch_size, lr, img_size, device, aug
             "precision": [],
             "recall": [],
         }
-        
+
         # Simulate training progress
         for epoch in range(actual_epochs):
             progress = (epoch + 1) / actual_epochs
             progress_bar.progress(progress)
-            
+
             # Simulate metrics
             train_loss = 3.5 * np.exp(-epoch / 5) + np.random.normal(0, 0.05)
             val_loss = 3.8 * np.exp(-epoch / 5) + np.random.normal(0, 0.08)
@@ -1424,7 +1460,7 @@ def train_model_real(architecture, epochs, batch_size, lr, img_size, device, aug
             map50_95 = min(0.78, 0.2 + 0.58 * (1 - np.exp(-epoch / 3)))
             precision = min(0.93, 0.4 + 0.53 * (1 - np.exp(-epoch / 2)))
             recall = min(0.90, 0.35 + 0.55 * (1 - np.exp(-epoch / 2)))
-            
+
             # Store metrics
             training_history["epoch"].append(epoch + 1)
             training_history["train_loss"].append(max(0, train_loss))
@@ -1433,14 +1469,16 @@ def train_model_real(architecture, epochs, batch_size, lr, img_size, device, aug
             training_history["map50_95"].append(max(0, min(1, map50_95)))
             training_history["precision"].append(max(0, min(1, precision)))
             training_history["recall"].append(max(0, min(1, recall)))
-            
+
             # Update status
             with status_container:
-                st.markdown(f"""
+                st.markdown(
+                    f"""
                 ### 🏃 Training Progress
-                **Epoch {epoch + 1}/{actual_epochs}** | **{progress*100:.1f}% Complete**
-                """)
-            
+                **Epoch {epoch + 1}/{actual_epochs}** | **{progress * 100:.1f}% Complete**
+                """
+                )
+
             # Update metrics
             with metrics_container:
                 col1, col2, col3, col4 = st.columns(4)
@@ -1448,12 +1486,12 @@ def train_model_real(architecture, epochs, batch_size, lr, img_size, device, aug
                 col2.metric("Val Loss", f"{val_loss:.4f}", f"{-0.008:.4f}")
                 col3.metric("mAP@0.5", f"{map50:.3f}", f"{0.002:.3f}")
                 col4.metric("mAP@0.5:0.95", f"{map50_95:.3f}", f"{0.001:.3f}")
-            
+
             # Update charts
             if epoch % 2 == 0:  # Update every 2 epochs
                 with charts_container:
                     df = pd.DataFrame(training_history)
-                    
+
                     # Loss curves
                     fig_loss = go.Figure()
                     fig_loss.add_trace(
@@ -1480,7 +1518,7 @@ def train_model_real(architecture, epochs, batch_size, lr, img_size, device, aug
                         yaxis_title="Loss",
                         height=300,
                     )
-                    
+
                     # Performance metrics
                     fig_metrics = go.Figure()
                     fig_metrics.add_trace(
@@ -1508,26 +1546,28 @@ def train_model_real(architecture, epochs, batch_size, lr, img_size, device, aug
                         yaxis_range=[0, 1],
                         height=300,
                     )
-                    
+
                     col1, col2 = st.columns(2)
                     with col1:
                         st.plotly_chart(fig_loss, use_container_width=True)
                     with col2:
                         st.plotly_chart(fig_metrics, use_container_width=True)
-            
+
             time.sleep(1)  # Simulate training time
 
         # Training complete
         st.session_state.training_active = False
-        st.success(f"""
+        st.success(
+            f"""
         🎉 **Training Complete!**
-        
+
         Final Performance:
         - mAP@0.5: {training_history['map50'][-1]:.3f}
         - mAP@0.5:0.95: {training_history['map50_95'][-1]:.3f}
         - Precision: {training_history['precision'][-1]:.3f}
         - Recall: {training_history['recall'][-1]:.3f}
-        """)
+        """
+        )
 
         # Save options
         col1, col2, col3 = st.columns(3)
@@ -1576,7 +1616,7 @@ def show_analytics_page():
     # Get real metrics if available
     if st.session_state.model_metrics:
         metrics = st.session_state.model_metrics
-        
+
         # Performance overview
         st.markdown("### 🎯 Overall Performance Metrics")
 
@@ -1584,10 +1624,10 @@ def show_analytics_page():
 
         with col1:
             st.metric(
-                "mAP@0.5", 
-                f"{metrics.get('metrics/mAP50(B)', 0.952):.1%}", 
+                "mAP@0.5",
+                f"{metrics.get('metrics/mAP50(B)', 0.952):.1%}",
                 f"↑ {abs(metrics.get('metrics/mAP50(B)', 0.952) - 0.931):.1%}",
-                help="Mean Average Precision at IoU 0.5"
+                help="Mean Average Precision at IoU 0.5",
             )
         with col2:
             st.metric(
@@ -1598,17 +1638,17 @@ def show_analytics_page():
             )
         with col3:
             st.metric(
-                "Precision", 
-                f"{metrics.get('metrics/precision(B)', 0.928):.1%}", 
+                "Precision",
+                f"{metrics.get('metrics/precision(B)', 0.928):.1%}",
                 f"↑ {abs(metrics.get('metrics/precision(B)', 0.928) - 0.916):.1%}",
-                help="True positives / All positives"
+                help="True positives / All positives",
             )
         with col4:
             st.metric(
-                "Recall", 
-                f"{metrics.get('metrics/recall(B)', 0.896):.1%}", 
+                "Recall",
+                f"{metrics.get('metrics/recall(B)', 0.896):.1%}",
                 f"↑ {abs(metrics.get('metrics/recall(B)', 0.896) - 0.868):.1%}",
-                help="True positives / All ground truth"
+                help="True positives / All ground truth",
             )
     else:
         # Use default values if no real metrics
@@ -1618,8 +1658,10 @@ def show_analytics_page():
 
         with col1:
             st.metric(
-                "mAP@0.5", "95.2%", "↑ 2.1%", help="Mean Average Precision at IoU 0.5"
-            )
+                "mAP@0.5",
+                "95.2%",
+                "↑ 2.1%",
+                help="Mean Average Precision at IoU 0.5")
         with col2:
             st.metric(
                 "mAP@0.5:0.95",
@@ -1628,9 +1670,17 @@ def show_analytics_page():
                 help="Mean Average Precision at IoU 0.5-0.95",
             )
         with col3:
-            st.metric("Precision", "92.8%", "↑ 1.2%", help="True positives / All positives")
+            st.metric(
+                "Precision",
+                "92.8%",
+                "↑ 1.2%",
+                help="True positives / All positives")
         with col4:
-            st.metric("Recall", "89.6%", "↑ 2.8%", help="True positives / All ground truth")
+            st.metric(
+                "Recall",
+                "89.6%",
+                "↑ 2.8%",
+                help="True positives / All ground truth")
 
     st.markdown("---")
 
@@ -1638,17 +1688,23 @@ def show_analytics_page():
     st.markdown("### 📈 Per-Class Performance Analysis")
 
     # Calculate real per-class metrics if model is loaded
-    if st.session_state.model and hasattr(st.session_state.model, 'names'):
+    if st.session_state.model and hasattr(st.session_state.model, "names"):
         class_names = list(st.session_state.model.names.values())
         # Create realistic per-class data
-        class_data = pd.DataFrame({
-            "Class": class_names[:4] if len(class_names) >= 4 else ["Biomüll", "Glas", "Papier", "Restmüll"],
-            "Precision": [0.94, 0.89, 0.96, 0.92],
-            "Recall": [0.91, 0.85, 0.93, 0.90],
-            "F1-Score": [0.925, 0.87, 0.945, 0.91],
-            "Support": [120, 95, 150, 101],
-            "AP@50": [0.96, 0.91, 0.97, 0.94],
-        })
+        class_data = pd.DataFrame(
+            {
+                "Class": (
+                    class_names[:4]
+                    if len(class_names) >= 4
+                    else ["Biomüll", "Glas", "Papier", "Restmüll"]
+                ),
+                "Precision": [0.94, 0.89, 0.96, 0.92],
+                "Recall": [0.91, 0.85, 0.93, 0.90],
+                "F1-Score": [0.925, 0.87, 0.945, 0.91],
+                "Support": [120, 95, 150, 101],
+                "AP@50": [0.96, 0.91, 0.97, 0.94],
+            }
+        )
     else:
         class_data = pd.DataFrame(
             {
@@ -1693,20 +1749,21 @@ def show_analytics_page():
     # Detection history analysis if available
     if st.session_state.detection_history:
         st.markdown("### 📊 Recent Detection Analysis")
-        
+
         df_history = pd.DataFrame(st.session_state.detection_history)
-        
+
         # Time-based analysis
-        df_history['hour'] = pd.to_datetime(df_history['timestamp']).dt.hour
-        hourly_counts = df_history.groupby(['hour', 'class']).size().reset_index(name='count')
-        
+        df_history["hour"] = pd.to_datetime(df_history["timestamp"]).dt.hour
+        hourly_counts = (df_history.groupby(
+            ["hour", "class"]).size().reset_index(name="count"))
+
         fig_timeline = px.line(
-            hourly_counts, 
-            x='hour', 
-            y='count', 
-            color='class',
+            hourly_counts,
+            x="hour",
+            y="count",
+            color="class",
             title="Detection Timeline by Category",
-            labels={'hour': 'Hour of Day', 'count': 'Number of Detections'}
+            labels={"hour": "Hour of Day", "count": "Number of Detections"},
         )
         st.plotly_chart(fig_timeline, use_container_width=True)
 
@@ -1730,7 +1787,9 @@ def show_analytics_page():
             aspect="auto",
         )
 
-        fig_cm.update_layout(title="Confusion Matrix - Model Predictions", height=400)
+        fig_cm.update_layout(
+            title="Confusion Matrix - Model Predictions",
+            height=400)
 
         st.plotly_chart(fig_cm, use_container_width=True)
 
@@ -1875,11 +1934,11 @@ def show_about_page():
     st.markdown(
         """
     ### 🎓 Academic Excellence
-    
-    This project was developed as part of the **Computer Vision** course at 
+
+    This project was developed as part of the **Computer Vision** course at
     **Technische Hochschule Deggendorf** and has been **successfully graded** by the university.
-    
-    The project demonstrates practical application of cutting-edge AI technology to solve 
+
+    The project demonstrates practical application of cutting-edge AI technology to solve
     real-world problems faced by international students and residents in Germany.
     """
     )
@@ -1889,50 +1948,57 @@ def show_about_page():
     # Team section with professional cards - REVISED CONTRIBUTIONS
     st.markdown("### 👨‍💻 Development Team")
 
-    team_members = [
-        {
-            "name": "Alex",
-            "role": "Lead Software Architect & ML Engineer",
-            "contributions": [
-                "System Architecture Design & Implementation",
-                "Full-Stack Application Development (Streamlit)",
-                "Model Integration & Optimization Pipeline",
-                "CI/CD & Cloud Deployment Infrastructure",
-                "Real-time Video Processing with WebRTC"
-            ],
-            "github": "HlexNC",
-            "linkedin": "#",
-            "skills": ["Python", "PyTorch", "Docker", "WebRTC", "Cloud Architecture"],
-        },
-        {
-            "name": "Fares",
-            "role": "Computer Vision Engineer & Data Specialist",
-            "contributions": [
-                "Dataset Creation & Annotation (466 images)",
-                "YOLO Model Training & Fine-tuning",
-                "Data Augmentation Pipeline Design",
-                "Model Evaluation & Performance Analysis",
-                "Label Studio Integration"
-            ],
-            "github": "FaresM7",
-            "linkedin": "#",
-            "skills": ["Computer Vision", "YOLO", "Data Annotation", "OpenCV", "ML Ops"],
-        },
-        {
-            "name": "Sameer",
-            "role": "AI Research Engineer & Project Coordinator",
-            "contributions": [
-                "Research & Algorithm Selection",
-                "Model Architecture Optimization",
-                "Performance Benchmarking Framework",
-                "Technical Documentation & Reporting",
-                "Cross-functional Team Coordination"
-            ],
-            "github": "TheSameerCode",
-            "linkedin": "#",
-            "skills": ["Deep Learning", "Research", "PyTorch", "Technical Writing", "Project Management"],
-        },
-    ]
+    team_members = [{"name": "Alex",
+                     "role": "Lead Software Architect & ML Engineer",
+                     "contributions": ["System Architecture Design & Implementation",
+                                       "Full-Stack Application Development (Streamlit)",
+                                       "Model Integration & Optimization Pipeline",
+                                       "CI/CD & Cloud Deployment Infrastructure",
+                                       "Real-time Video Processing with WebRTC",
+                                       ],
+                     "github": "HlexNC",
+                     "linkedin": "#",
+                     "skills": ["Python",
+                                "PyTorch",
+                                "Docker",
+                                "WebRTC",
+                                "Cloud Architecture"],
+                     },
+                    {"name": "Fares",
+                     "role": "Computer Vision Engineer & Data Specialist",
+                     "contributions": ["Dataset Creation & Annotation (466 images)",
+                                       "YOLO Model Training & Fine-tuning",
+                                       "Data Augmentation Pipeline Design",
+                                       "Model Evaluation & Performance Analysis",
+                                       "Label Studio Integration",
+                                       ],
+                     "github": "FaresM7",
+                     "linkedin": "#",
+                     "skills": ["Computer Vision",
+                                "YOLO",
+                                "Data Annotation",
+                                "OpenCV",
+                                "ML Ops",
+                                ],
+                     },
+                    {"name": "Sameer",
+                     "role": "AI Research Engineer & Project Coordinator",
+                     "contributions": ["Research & Algorithm Selection",
+                                       "Model Architecture Optimization",
+                                       "Performance Benchmarking Framework",
+                                       "Technical Documentation & Reporting",
+                                       "Cross-functional Team Coordination",
+                                       ],
+                     "github": "TheSameerCode",
+                     "linkedin": "#",
+                     "skills": ["Deep Learning",
+                                "Research",
+                                "PyTorch",
+                                "Technical Writing",
+                                "Project Management",
+                                ],
+                     },
+                    ]
 
     cols = st.columns(3)
 
@@ -1942,15 +2008,11 @@ def show_about_page():
             st.markdown(f"*{member['role']}*")
 
             st.markdown("**Key Contributions:**")
-            for contrib in member['contributions']:
+            for contrib in member["contributions"]:
                 st.markdown(f"- {contrib}")
 
             st.markdown("**Skills:**")
-            st.markdown(
-                " ".join(
-                    [f"`{skill}`" for skill in member['skills']]
-                )
-            )
+            st.markdown(" ".join([f"`{skill}`" for skill in member["skills"]]))
 
             st.markdown(
                 f"[![GitHub](https://img.shields.io/badge/GitHub-Profile-181717?style=for-the-badge&logo=github)](https://github.com/{member['github']})"
@@ -1973,7 +2035,7 @@ def show_about_page():
         - 📊 **Training**: Custom hyperparameters
         - 🎯 **Performance**: 95%+ mAP@0.5
         - 🎥 **Streaming**: WebRTC for real-time video
-        
+
         **Development Tools**
         - 🐍 Python 3.10+
         - 📦 PyTorch 2.0
@@ -1993,7 +2055,7 @@ def show_about_page():
         - ☁️ **Hosting**: Cloud-ready architecture
         - 🔒 **Security**: Best practices implemented
         - 📡 **WebRTC**: Real-time streaming
-        
+
         **Web Technologies**
         - 🌐 Streamlit 1.31+
         - 📊 Plotly for visualizations
