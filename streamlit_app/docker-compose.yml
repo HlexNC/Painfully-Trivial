@@ -41,8 +41,8 @@ services:
       
       # For development - mount source code
       - ./app.py:/app/app.py:ro
-      - ./pages:/app/pages:ro
-      - ./utils:/app/utils:ro
+      # - ./pages:/app/pages:ro
+      # - ./utils:/app/utils:ro
       
     restart: unless-stopped
     

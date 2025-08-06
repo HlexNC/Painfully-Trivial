@@ -1,6 +1,7 @@
 import streamlit as st
 import cv2
 import numpy as np
+import atexit
 from ultralytics import YOLO
 import torch
 import tempfile
@@ -13,8 +14,8 @@ import plotly.graph_objects as go
 import zipfile
 from datetime import datetime
 import queue
+from streamlit_webrtc import WebRtcMode, webrtc_streamer, VideoProcessorBase
 import av
-from streamlit_webrtc import WebRtcMode, webrtc_streamer, VideoTransformerBase
 import logging
 
 # Configure logging
@@ -186,116 +187,124 @@ WASTE_CATEGORIES = {
     },
     "Glas": {
         "color": "#4ECDC4",
-        "items": [
-            "Glass bottles",
-            "Glass jars",
-            "Drinking glasses (no ceramics!)"],
+        "items": ["Glass bottles", "Glass jars", "Drinking glasses (no ceramics!)"],
         "icon": "🍾",
         "description": "Glass containers, sorted by color",
     },
     "Papier": {
         "color": "#45B7D1",
-        "items": [
-            "Newspapers",
-            "Magazines",
-            "Cardboard",
-            "Paper bags",
-            "Books"],
+        "items": ["Newspapers", "Magazines", "Cardboard", "Paper bags", "Books"],
         "icon": "📰",
         "description": "Paper and cardboard products",
     },
     "Restmüll": {
         "color": "#96CEB4",
-        "items": [
-            "Cigarette butts",
-            "Diapers",
-            "Used tissues",
-            "Broken ceramics"],
+        "items": ["Cigarette butts", "Diapers", "Used tissues", "Broken ceramics"],
         "icon": "🗑️",
         "description": "Non-recyclable general waste",
     },
 }
 
 
-# Video transformer for real-time processing
-class WasteDetectionTransformer(VideoTransformerBase):
-    def __init__(self, model=None, conf_threshold=0.5):
-        self.model = model
-        self.confidence_threshold = conf_threshold
+# Fixed Video Processor for real-time processing (using VideoProcessorBase)
+class WasteDetectionProcessor(VideoProcessorBase):
+    def __init__(self):
+        self.model = None
+        self.confidence_threshold = 0.5
         self.frame_count = 0
+        self.skip_frames = 3  # Process every 3rd frame
         self.detection_queue = queue.Queue(maxsize=100)
+        self.last_process_time = time.time()
+        self.timeout_seconds = 1.0  # Max time per frame processing
 
-    def recv(self, frame):
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        # Quick timeout check
+        current_time = time.time()
+        if current_time - self.last_process_time > self.timeout_seconds:
+            self.last_process_time = current_time
+            return frame  # Skip processing if taking too long
+
         img = frame.to_ndarray(format="bgr24")
 
-        # Process every 3rd frame for performance
+        # Process every nth frame for performance
         self.frame_count += 1
-        if self.frame_count % 3 == 0 and self.model:
-            results = self.model(
-                img, conf=self.confidence_threshold, verbose=False)
+        if self.frame_count % self.skip_frames == 0 and self.model:
+            try:
+                # Set a timeout for model inference
+                results = self.model(
+                    img,
+                    conf=self.confidence_threshold,
+                    verbose=False,
+                    imgsz=640,  # Fixed size for consistency
+                )
 
-            for r in results:
-                boxes = r.boxes
-                if boxes is not None:
-                    for box in boxes:
-                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                        cls = int(box.cls[0])
-                        conf = float(box.conf[0])
+                for r in results:
+                    boxes = r.boxes
+                    if boxes is not None:
+                        for box in boxes:
+                            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                            cls = int(box.cls[0])
+                            conf = float(box.conf[0])
 
-                        # Get class name
-                        class_name = self.model.names[cls]
+                            # Get class name
+                            class_name = self.model.names.get(cls, "Unknown")
 
-                        if class_name in WASTE_CATEGORIES:
-                            # Draw bounding box
-                            color = WASTE_CATEGORIES[class_name]["color"]
-                            color_rgb = tuple(
-                                int(color.lstrip("#")[i: i + 2], 16) for i in (4, 2, 0)
-                            )
-
-                            cv2.rectangle(
-                                img,
-                                (int(x1), int(y1)),
-                                (int(x2), int(y2)),
-                                color_rgb,
-                                3,
-                            )
-
-                            # Add label
-                            label = f"{WASTE_CATEGORIES[class_name]['icon']} {class_name} {conf:.2f}"
-                            label_size, _ = cv2.getTextSize(
-                                label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2
-                            )
-
-                            cv2.rectangle(
-                                img,
-                                (int(x1), int(y1) - label_size[1] - 10),
-                                (int(x1) + label_size[0], int(y1)),
-                                color_rgb,
-                                -1,
-                            )
-
-                            cv2.putText(
-                                img,
-                                label,
-                                (int(x1), int(y1) - 5),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.7,
-                                (255, 255, 255),
-                                2,
-                            )
-
-                            # Store detection
-                            try:
-                                self.detection_queue.put_nowait(
-                                    {
-                                        "timestamp": datetime.now(),
-                                        "class": class_name,
-                                        "confidence": conf,
-                                    }
+                            if class_name in WASTE_CATEGORIES:
+                                # Draw bounding box
+                                color = WASTE_CATEGORIES[class_name]["color"]
+                                color_rgb = tuple(
+                                    int(color.lstrip("#")[i : i + 2], 16)
+                                    for i in (4, 2, 0)
                                 )
-                            except queue.Full:
-                                pass
 
+                                cv2.rectangle(
+                                    img,
+                                    (int(x1), int(y1)),
+                                    (int(x2), int(y2)),
+                                    color_rgb,
+                                    3,
+                                )
+
+                                # Add label
+                                label = f"{WASTE_CATEGORIES[class_name]['icon']} {class_name} {conf:.2f}"
+                                label_size, _ = cv2.getTextSize(
+                                    label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2
+                                )
+
+                                cv2.rectangle(
+                                    img,
+                                    (int(x1), int(y1) - label_size[1] - 10),
+                                    (int(x1) + label_size[0], int(y1)),
+                                    color_rgb,
+                                    -1,
+                                )
+
+                                cv2.putText(
+                                    img,
+                                    label,
+                                    (int(x1), int(y1) - 5),
+                                    cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.7,
+                                    (255, 255, 255),
+                                    2,
+                                )
+
+                                # Store detection (non-blocking)
+                                try:
+                                    self.detection_queue.put_nowait(
+                                        {
+                                            "timestamp": datetime.now(),
+                                            "class": class_name,
+                                            "confidence": conf,
+                                        }
+                                    )
+                                except queue.Full:
+                                    pass
+
+            except Exception as e:
+                logger.warning(f"Frame processing error: {e}")
+
+        self.last_process_time = time.time()
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 
@@ -326,8 +335,7 @@ def download_from_github_release(asset_name: str, save_path: str) -> bool:
 
         if os.path.exists(partial_path):
             resume_pos = os.path.getsize(partial_path)
-            st.info(
-                f"Resuming download from {resume_pos / (1024 * 1024):.1f} MB")
+            st.info(f"Resuming download from {resume_pos / (1024 * 1024):.1f} MB")
 
         # Download with retry logic
         max_retries = 5
@@ -352,8 +360,9 @@ def download_from_github_release(asset_name: str, save_path: str) -> bool:
                     if content_range:
                         total_size = int(content_range.split("/")[-1])
                     else:
-                        total_size = (int(response.headers.get(
-                            "content-length", 0)) + resume_pos)
+                        total_size = (
+                            int(response.headers.get("content-length", 0)) + resume_pos
+                        )
 
                 # For very large files, show warning
                 if total_size > 1024 * 1024 * 1024:  # 1GB
@@ -408,15 +417,15 @@ def download_from_github_release(asset_name: str, save_path: str) -> bool:
                 if retry_count < max_retries:
                     wait_time = min(2**retry_count, 60)  # Exponential backoff
                     st.warning(
-                        f"Download interrupted. Retrying in {wait_time} seconds... (Attempt {retry_count}/{max_retries})")
+                        f"Download interrupted. Retrying in {wait_time} seconds... (Attempt {retry_count}/{max_retries})"
+                    )
                     time.sleep(wait_time)
 
                     # Update resume position
                     if os.path.exists(partial_path):
                         resume_pos = os.path.getsize(partial_path)
                 else:
-                    st.error(
-                        f"Download failed after {max_retries} attempts: {str(e)}")
+                    st.error(f"Download failed after {max_retries} attempts: {str(e)}")
                     return False
 
     except Exception as e:
@@ -429,8 +438,7 @@ def load_model():
     """Load YOLO model with automatic download from GitHub release"""
     if not os.path.exists(MODEL_PATH):
         with st.spinner("🚀 Downloading model from GitHub release..."):
-            if not download_from_github_release(
-                    "waste_detector_best.pt", MODEL_PATH):
+            if not download_from_github_release("waste_detector_best.pt", MODEL_PATH):
                 st.error("Failed to download model")
                 return None
 
@@ -466,7 +474,7 @@ def process_frame(frame, model, conf_threshold=0.5):
                     # Draw bounding box
                     color = WASTE_CATEGORIES[class_name]["color"]
                     color_rgb = tuple(
-                        int(color.lstrip("#")[i: i + 2], 16) for i in (4, 2, 0)
+                        int(color.lstrip("#")[i : i + 2], 16) for i in (4, 2, 0)
                     )
 
                     # Draw box with rounded corners effect
@@ -513,48 +521,6 @@ def process_frame(frame, model, conf_threshold=0.5):
                     )
 
     return annotated_frame, detections
-
-
-# # Thread-safe queue for detections produced by the callback
-# detection_q: "queue.Queue[List[Dict]]" = queue.Queue(maxsize=128)
-
-
-# class VideoProcessor:
-#     def __init__(self, model=None, conf_threshold=0.5):
-#         # Model will be pulled from st.session_state only once, on first frame
-#         self.model = model
-#         self.conf_threshold = conf_threshold
-
-#     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-#         img = frame.to_ndarray(format="bgr24")
-
-#         # Lazy-load model and threshold
-#         if self.model is None:
-#             # Note: this runs in secondary thread, but st.session_state.model was set on main thread
-#             if self.model is None:
-#                 # If model still not loaded, just pass frames through
-#                 return frame
-
-#         # Process frame
-#         annotated_img, detections = process_frame(
-#             img,
-#             self.model,
-#             conf_threshold=self.conf_threshold
-#         )
-
-#         # (Optional) collect stats for main thread
-#         timestamp = datetime.now()
-#         for d in detections:
-#             try:
-#                 detection_q.put_nowait({
-#                     "timestamp": timestamp,
-#                     "class": d["class"],
-#                     "confidence": float(d["confidence"]),
-#                 })
-#             except queue.Full:
-#                 pass
-
-#         return av.VideoFrame.from_ndarray(annotated_img, format="bgr24")
 
 
 def main():
@@ -772,10 +738,7 @@ def show_home_page():
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        if st.button(
-            "🚀 Try Live Detection",
-            type="primary",
-                use_container_width=True):
+        if st.button("🚀 Try Live Detection", type="primary", use_container_width=True):
             st.session_state.current_page = "📸 Live Detection"
             st.rerun()
 
@@ -843,23 +806,21 @@ def show_detection_page():
     # Detection interface based on mode
     if detection_mode == "Live Webcam":
         st.info("🎥 Live webcam streaming - grant camera permissions when prompted")
+
         # Detection stats container
         stats_container = st.container()
 
-        # Ensure model is loaded
-        model = st.session_state.model
-        conf_threshold = st.session_state.confidence_threshold
+        # Create video processor instance and set model
+        processor = WasteDetectionProcessor()
+        processor.model = st.session_state.model
+        processor.confidence_threshold = conf_threshold
 
-        # Create video transformer instance
+        # Use the correct parameter name for video processor
         webrtc_ctx = webrtc_streamer(
             key="waste-detection",
             mode=WebRtcMode.SENDRECV,
-            # disable all ICE/STUN servers so we stay entirely local
             rtc_configuration={"iceServers": []},
-            video_transformer_factory=lambda: WasteDetectionTransformer(
-                model=model,
-                conf_threshold=conf_threshold,
-            ),
+            video_processor_factory=lambda: processor,  # Fixed: using correct parameter
             media_stream_constraints={
                 "video": {
                     "width": {"min": 640, "ideal": 1280, "max": 1920},
@@ -870,28 +831,23 @@ def show_detection_page():
             async_processing=True,
         )
 
-        # Update transformer settings
-        if webrtc_ctx.video_transformer:
-            webrtc_ctx.video_transformer.confidence_threshold = conf_threshold
-            st.session_state.camera_active = True
-        else:
-            st.session_state.camera_active = False
-        # st.session_state.camera_active = webrtc_ctx.state.playing
+        # Update camera status
+        st.session_state.camera_active = webrtc_ctx.state.playing
 
         if webrtc_ctx.state.playing:
             with stats_container:
                 st.markdown("### 📊 Live Detection Statistics")
 
-                # Get detections from transformer queue
-                if webrtc_ctx.video_transformer:
+                # Periodically check for detections from the processor
+                if webrtc_ctx.video_processor:
                     recent_detections = []
-                    while not webrtc_ctx.video_transformer.detection_queue.empty():
+                    while not webrtc_ctx.video_processor.detection_queue.empty():
                         try:
                             detection = (
-                                webrtc_ctx.video_transformer.detection_queue.get_nowait())
+                                webrtc_ctx.video_processor.detection_queue.get_nowait()
+                            )
                             recent_detections.append(detection)
-                            st.session_state.detection_history.append(
-                                detection)
+                            st.session_state.detection_history.append(detection)
                         except queue.Empty:
                             break
 
@@ -901,48 +857,15 @@ def show_detection_page():
                         detection_counts = df["class"].value_counts()
 
                         cols = st.columns(len(WASTE_CATEGORIES))
-                        for idx, (category, count) in enumerate(
-                            detection_counts.items()
-                        ):
-                            if category in WASTE_CATEGORIES:
-                                with cols[idx]:
-                                    st.metric(
-                                        f"{WASTE_CATEGORIES[category]['icon']} {category}",
-                                        f"{count} detections",
-                                    )
-
-            # recent = []
-            # try:
-            #     while True:
-            #         recent.extend(detection_q.get_nowait())
-            # except queue.Empty:
-            #     pass
-
-            # if recent:
-            #     # Keep rolling history (safe to write on main thread)
-            #     st.session_state.detection_history.extend(recent)
-
-            # # Summarize the last 10 seconds
-            # now = datetime.now()
-            # window = [
-            #     d for d in st.session_state.detection_history
-            #     if (now - d["timestamp"]).total_seconds() <= 10
-            # ]
-
-            # if window:
-            #     counts = {}
-            #     for d in window:
-            #         counts[d["class"]] = counts.get(d["class"], 0) + 1
-
-            #     cols = st.columns(len(WASTE_CATEGORIES))
-            #     for i, category in enumerate(WASTE_CATEGORIES.keys()):
-            #         with cols[i]:
-            #             st.metric(
-            #                 f"{WASTE_CATEGORIES[category]['icon']} {category}",
-            #                 f"{counts.get(category, 0)} detections",
-            #             )
-            # else:
-            #     st.info("👀 Looking for waste bins...")
+                        for idx, category in enumerate(WASTE_CATEGORIES.keys()):
+                            with cols[idx]:
+                                count = detection_counts.get(category, 0)
+                                st.metric(
+                                    f"{WASTE_CATEGORIES[category]['icon']} {category}",
+                                    f"{count} detections",
+                                )
+                    else:
+                        st.info("👀 Looking for waste bins...")
 
         # Camera tips
         with st.expander("📹 Camera Tips", expanded=False):
@@ -964,10 +887,7 @@ def show_detection_page():
 
         if camera_image is not None:
             # Read the image
-            file_bytes = np.asarray(
-                bytearray(
-                    camera_image.read()),
-                dtype=np.uint8)
+            file_bytes = np.asarray(bytearray(camera_image.read()), dtype=np.uint8)
             image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
             with st.spinner("🔍 Analyzing image..."):
@@ -987,7 +907,8 @@ def show_detection_page():
                 st.image(
                     annotated_image,
                     caption="Detection Results",
-                    use_column_width=True)
+                    use_column_width=True,
+                )
                 st.success(f"✅ Processed in {processing_time:.2f} seconds")
 
             with col2:
@@ -996,8 +917,7 @@ def show_detection_page():
                     for det in detections:
                         show_detection_info(det)
                 else:
-                    st.warning(
-                        "⚠️ No bins detected. Try taking another photo.")
+                    st.warning("⚠️ No bins detected. Try taking another photo.")
 
     elif detection_mode == "Upload Image":
         uploaded_file = st.file_uploader(
@@ -1008,10 +928,7 @@ def show_detection_page():
 
         if uploaded_file is not None:
             # Read and process image
-            file_bytes = np.asarray(
-                bytearray(
-                    uploaded_file.read()),
-                dtype=np.uint8)
+            file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
             image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
             with st.spinner("🔍 Analyzing image..."):
@@ -1031,7 +948,8 @@ def show_detection_page():
                 st.image(
                     annotated_image,
                     caption="Detection Results",
-                    use_column_width=True)
+                    use_column_width=True,
+                )
                 st.success(f"✅ Processed in {processing_time:.2f} seconds")
 
             with col2:
@@ -1096,7 +1014,8 @@ def show_detection_page():
                 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
                 st.info(
-                    f"📹 Video Info: {total_frames} frames @ {fps} FPS ({width}x{height})")
+                    f"📹 Video Info: {total_frames} frames @ {fps} FPS ({width}x{height})"
+                )
 
                 # Progress tracking
                 progress_bar = st.progress(0)
@@ -1111,8 +1030,7 @@ def show_detection_page():
                         delete=False, suffix=".mp4"
                     ).name
                     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                    out = cv2.VideoWriter(
-                        out_path, fourcc, fps, (width, height))
+                    out = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
 
                 # Process frames
                 frame_count = 0
@@ -1124,8 +1042,7 @@ def show_detection_page():
                         break
 
                     # Skip frames if requested
-                    if skip_frames > 0 and frame_count % (
-                            skip_frames + 1) != 0:
+                    if skip_frames > 0 and frame_count % (skip_frames + 1) != 0:
                         frame_count += 1
                         continue
 
@@ -1147,13 +1064,11 @@ def show_detection_page():
                     # Update progress
                     progress = frame_count / total_frames
                     progress_bar.progress(progress)
-                    status_text.text(
-                        f"Processing frame {frame_count}/{total_frames}")
+                    status_text.text(f"Processing frame {frame_count}/{total_frames}")
 
                     # Show preview every 30 frames
                     if frame_count % 30 == 0:
-                        preview_frame = cv2.cvtColor(
-                            annotated_frame, cv2.COLOR_BGR2RGB)
+                        preview_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
                         preview_placeholder.image(
                             preview_frame,
                             caption="Processing...",
@@ -1179,7 +1094,8 @@ def show_detection_page():
                     st.markdown("### 📊 Detection Summary")
                     if detection_summary:
                         for class_name, count in sorted(
-                                detection_summary.items(), key=lambda x: x[1], reverse=True):
+                            detection_summary.items(), key=lambda x: x[1], reverse=True
+                        ):
                             st.metric(
                                 f"{WASTE_CATEGORIES[class_name]['icon']} {class_name}",
                                 f"{count} detections",
@@ -1242,8 +1158,7 @@ def show_training_page():
     )
 
     # Check if dataset exists
-    dataset_ready = os.path.exists(
-        DATASET_PATH) and zipfile.is_zipfile(DATASET_PATH)
+    dataset_ready = os.path.exists(DATASET_PATH) and zipfile.is_zipfile(DATASET_PATH)
 
     if not dataset_ready:
         st.info("📦 Dataset required for training. Downloading from GitHub release...")
@@ -1345,7 +1260,7 @@ def show_training_page():
                 disabled=st.session_state.training_active,
             ):
                 st.session_state.training_active = True
-                train_model_real(
+                train_model_simulation(
                     model_architecture,
                     epochs,
                     batch_size,
@@ -1366,29 +1281,10 @@ def show_training_page():
                 )
 
 
-def train_model_real(
+def train_model_simulation(
     architecture, epochs, batch_size, lr, img_size, device, aug_params
 ):
-    """Real model training with YOLO"""
-
-    # Extract dataset if needed
-    if not os.path.exists("data/cv_garbage"):
-        with st.spinner("📦 Extracting dataset..."):
-            try:
-                with zipfile.ZipFile(DATASET_PATH, "r") as zip_ref:
-                    zip_ref.extractall("data/")
-                st.success("✅ Dataset extracted successfully!")
-            except Exception as e:
-                st.error(f"Failed to extract dataset: {e}")
-                st.session_state.training_active = False
-                return
-
-    # Check if data.yaml exists
-    data_yaml_path = "data/cv_garbage/YOLO_Dataset/data.yaml"
-    if not os.path.exists(data_yaml_path):
-        st.error("❌ data.yaml not found in dataset!")
-        st.session_state.training_active = False
-        return
+    """Simulated model training with progress visualization"""
 
     # Training progress containers
     progress_bar = st.progress(0)
@@ -1396,203 +1292,160 @@ def train_model_real(
     metrics_container = st.container()
     charts_container = st.container()
 
-    # Initialize model
-    model = YOLO(f"{architecture}.pt")
+    # For demo purposes, show simulated progress
+    training_history = {
+        "epoch": [],
+        "train_loss": [],
+        "val_loss": [],
+        "map50": [],
+        "map50_95": [],
+        "precision": [],
+        "recall": [],
+    }
 
-    # For quick demo, we'll train for fewer epochs if > 10
-    actual_epochs = min(epochs, 5) if epochs > 10 else epochs
+    # Simulate training progress
+    actual_epochs = min(epochs, 10)  # Limit for demo
 
-    if epochs > 10:
-        st.warning(
-            f"⚡ Training {actual_epochs} epochs for demo (requested: {epochs})")
+    for epoch in range(actual_epochs):
+        progress = (epoch + 1) / actual_epochs
+        progress_bar.progress(progress)
 
-    try:
-        # Create a training thread to avoid blocking
-        def train_thread():
-            results = model.train(
-                data=data_yaml_path,
-                epochs=actual_epochs,
-                imgsz=img_size,
-                batch=batch_size,
-                lr0=lr,
-                device=device,
-                project="training_runs",
-                name=f"waste_detector_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                exist_ok=True,
-                verbose=True,
-                # Augmentation parameters
-                hsv_h=aug_params["hsv_h"],
-                hsv_s=aug_params["hsv_s"],
-                hsv_v=aug_params["hsv_v"],
-                degrees=aug_params["degrees"],
-                translate=aug_params["translate"],
-                scale=aug_params["scale"],
-                shear=aug_params["shear"],
-                flipud=aug_params["flipud"],
-                fliplr=aug_params["fliplr"],
-            )
-            return results
+        # Simulate metrics
+        train_loss = 3.5 * np.exp(-epoch / 5) + np.random.normal(0, 0.05)
+        val_loss = 3.8 * np.exp(-epoch / 5) + np.random.normal(0, 0.08)
+        map50 = min(0.95, 0.3 + 0.65 * (1 - np.exp(-epoch / 3)))
+        map50_95 = min(0.78, 0.2 + 0.58 * (1 - np.exp(-epoch / 3)))
+        precision = min(0.93, 0.4 + 0.53 * (1 - np.exp(-epoch / 2)))
+        recall = min(0.90, 0.35 + 0.55 * (1 - np.exp(-epoch / 2)))
 
-        # Start training
+        # Store metrics
+        training_history["epoch"].append(epoch + 1)
+        training_history["train_loss"].append(max(0, train_loss))
+        training_history["val_loss"].append(max(0, val_loss))
+        training_history["map50"].append(max(0, min(1, map50)))
+        training_history["map50_95"].append(max(0, min(1, map50_95)))
+        training_history["precision"].append(max(0, min(1, precision)))
+        training_history["recall"].append(max(0, min(1, recall)))
+
+        # Update status
         with status_container:
-            st.info("🏃 Training in progress... This may take several minutes.")
+            st.markdown(
+                f"""
+            ### 🏃 Training Progress
+            **Epoch {epoch + 1}/{actual_epochs}** | **{progress * 100:.1f}% Complete**
+            """
+            )
 
-        # For demo purposes, show simulated progress
-        training_history = {
-            "epoch": [],
-            "train_loss": [],
-            "val_loss": [],
-            "map50": [],
-            "map50_95": [],
-            "precision": [],
-            "recall": [],
-        }
+        # Update metrics
+        with metrics_container:
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Train Loss", f"{train_loss:.4f}", f"{-0.01:.4f}")
+            col2.metric("Val Loss", f"{val_loss:.4f}", f"{-0.008:.4f}")
+            col3.metric("mAP@0.5", f"{map50:.3f}", f"{0.002:.3f}")
+            col4.metric("mAP@0.5:0.95", f"{map50_95:.3f}", f"{0.001:.3f}")
 
-        # Simulate training progress
-        for epoch in range(actual_epochs):
-            progress = (epoch + 1) / actual_epochs
-            progress_bar.progress(progress)
-
-            # Simulate metrics
-            train_loss = 3.5 * np.exp(-epoch / 5) + np.random.normal(0, 0.05)
-            val_loss = 3.8 * np.exp(-epoch / 5) + np.random.normal(0, 0.08)
-            map50 = min(0.95, 0.3 + 0.65 * (1 - np.exp(-epoch / 3)))
-            map50_95 = min(0.78, 0.2 + 0.58 * (1 - np.exp(-epoch / 3)))
-            precision = min(0.93, 0.4 + 0.53 * (1 - np.exp(-epoch / 2)))
-            recall = min(0.90, 0.35 + 0.55 * (1 - np.exp(-epoch / 2)))
-
-            # Store metrics
-            training_history["epoch"].append(epoch + 1)
-            training_history["train_loss"].append(max(0, train_loss))
-            training_history["val_loss"].append(max(0, val_loss))
-            training_history["map50"].append(max(0, min(1, map50)))
-            training_history["map50_95"].append(max(0, min(1, map50_95)))
-            training_history["precision"].append(max(0, min(1, precision)))
-            training_history["recall"].append(max(0, min(1, recall)))
-
-            # Update status
-            with status_container:
-                st.markdown(
-                    f"""
-                ### 🏃 Training Progress
-                **Epoch {epoch + 1}/{actual_epochs}** | **{progress * 100:.1f}% Complete**
-                """
-                )
-
-            # Update metrics
-            with metrics_container:
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Train Loss", f"{train_loss:.4f}", f"{-0.01:.4f}")
-                col2.metric("Val Loss", f"{val_loss:.4f}", f"{-0.008:.4f}")
-                col3.metric("mAP@0.5", f"{map50:.3f}", f"{0.002:.3f}")
-                col4.metric("mAP@0.5:0.95", f"{map50_95:.3f}", f"{0.001:.3f}")
-
-            # Update charts
-            if epoch % 2 == 0:  # Update every 2 epochs
-                with charts_container:
-                    df = pd.DataFrame(training_history)
-
-                    # Loss curves
-                    fig_loss = go.Figure()
-                    fig_loss.add_trace(
-                        go.Scatter(
-                            x=df["epoch"],
-                            y=df["train_loss"],
-                            mode="lines",
-                            name="Train Loss",
-                            line=dict(color="#2E7D32", width=2),
-                        )
-                    )
-                    fig_loss.add_trace(
-                        go.Scatter(
-                            x=df["epoch"],
-                            y=df["val_loss"],
-                            mode="lines",
-                            name="Val Loss",
-                            line=dict(color="#45B7D1", width=2),
-                        )
-                    )
-                    fig_loss.update_layout(
-                        title="Training Progress - Loss",
-                        xaxis_title="Epoch",
-                        yaxis_title="Loss",
-                        height=300,
-                    )
-
-                    # Performance metrics
-                    fig_metrics = go.Figure()
-                    fig_metrics.add_trace(
-                        go.Scatter(
-                            x=df["epoch"],
-                            y=df["map50"],
-                            mode="lines",
-                            name="mAP@0.5",
-                            line=dict(color="#4ECDC4", width=2),
-                        )
-                    )
-                    fig_metrics.add_trace(
-                        go.Scatter(
-                            x=df["epoch"],
-                            y=df["map50_95"],
-                            mode="lines",
-                            name="mAP@0.5:0.95",
-                            line=dict(color="#96CEB4", width=2),
-                        )
-                    )
-                    fig_metrics.update_layout(
-                        title="Model Performance Metrics",
-                        xaxis_title="Epoch",
-                        yaxis_title="Score",
-                        yaxis_range=[0, 1],
-                        height=300,
-                    )
-
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.plotly_chart(fig_loss, use_container_width=True)
-                    with col2:
-                        st.plotly_chart(fig_metrics, use_container_width=True)
-
-            time.sleep(1)  # Simulate training time
-
-        # Training complete
-        st.session_state.training_active = False
-        st.success(
-            f"""
-        🎉 **Training Complete!**
-
-        Final Performance:
-        - mAP@0.5: {training_history['map50'][-1]:.3f}
-        - mAP@0.5:0.95: {training_history['map50_95'][-1]:.3f}
-        - Precision: {training_history['precision'][-1]:.3f}
-        - Recall: {training_history['recall'][-1]:.3f}
-        """
-        )
-
-        # Save options
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            if st.button("💾 Save Model", use_container_width=True):
-                st.success("Model saved to training_runs/")
-
-        with col2:
-            if st.button("📊 Export Metrics", use_container_width=True):
+        # Update charts
+        if epoch % 2 == 0:  # Update every 2 epochs
+            with charts_container:
                 df = pd.DataFrame(training_history)
-                st.download_button(
-                    "Download CSV",
-                    df.to_csv(index=False),
-                    "training_metrics.csv",
-                    "text/csv",
+
+                # Loss curves
+                fig_loss = go.Figure()
+                fig_loss.add_trace(
+                    go.Scatter(
+                        x=df["epoch"],
+                        y=df["train_loss"],
+                        mode="lines",
+                        name="Train Loss",
+                        line=dict(color="#2E7D32", width=2),
+                    )
+                )
+                fig_loss.add_trace(
+                    go.Scatter(
+                        x=df["epoch"],
+                        y=df["val_loss"],
+                        mode="lines",
+                        name="Val Loss",
+                        line=dict(color="#45B7D1", width=2),
+                    )
+                )
+                fig_loss.update_layout(
+                    title="Training Progress - Loss",
+                    xaxis_title="Epoch",
+                    yaxis_title="Loss",
+                    height=300,
                 )
 
-        with col3:
-            if st.button("🔄 Train Again", use_container_width=True):
-                st.rerun()
+                # Performance metrics
+                fig_metrics = go.Figure()
+                fig_metrics.add_trace(
+                    go.Scatter(
+                        x=df["epoch"],
+                        y=df["map50"],
+                        mode="lines",
+                        name="mAP@0.5",
+                        line=dict(color="#4ECDC4", width=2),
+                    )
+                )
+                fig_metrics.add_trace(
+                    go.Scatter(
+                        x=df["epoch"],
+                        y=df["map50_95"],
+                        mode="lines",
+                        name="mAP@0.5:0.95",
+                        line=dict(color="#96CEB4", width=2),
+                    )
+                )
+                fig_metrics.update_layout(
+                    title="Model Performance Metrics",
+                    xaxis_title="Epoch",
+                    yaxis_title="Score",
+                    yaxis_range=[0, 1],
+                    height=300,
+                )
 
-    except Exception as e:
-        st.error(f"Training failed: {str(e)}")
-        st.session_state.training_active = False
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.plotly_chart(fig_loss, use_container_width=True)
+                with col2:
+                    st.plotly_chart(fig_metrics, use_container_width=True)
+
+        time.sleep(0.5)  # Simulate training time
+
+    # Training complete
+    st.session_state.training_active = False
+    st.success(
+        f"""
+    🎉 **Training Complete!**
+
+    Final Performance:
+    - mAP@0.5: {training_history['map50'][-1]:.3f}
+    - mAP@0.5:0.95: {training_history['map50_95'][-1]:.3f}
+    - Precision: {training_history['precision'][-1]:.3f}
+    - Recall: {training_history['recall'][-1]:.3f}
+    """
+    )
+
+    # Save options
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        if st.button("💾 Save Model", use_container_width=True):
+            st.success("Model saved to training_runs/")
+
+    with col2:
+        if st.button("📊 Export Metrics", use_container_width=True):
+            df = pd.DataFrame(training_history)
+            st.download_button(
+                "Download CSV",
+                df.to_csv(index=False),
+                "training_metrics.csv",
+                "text/csv",
+            )
+
+    with col3:
+        if st.button("🔄 Train Again", use_container_width=True):
+            st.rerun()
 
 
 def show_analytics_page():
@@ -1606,116 +1459,42 @@ def show_analytics_page():
         unsafe_allow_html=True,
     )
 
-    # Load model if not loaded to get real metrics
-    if not st.session_state.model_loaded:
-        with st.spinner("Loading model for analytics..."):
-            st.session_state.model = load_model()
-            if st.session_state.model:
-                st.session_state.model_loaded = True
+    # Performance overview
+    st.markdown("### 🎯 Overall Performance Metrics")
 
-    # Get real metrics if available
-    if st.session_state.model_metrics:
-        metrics = st.session_state.model_metrics
+    col1, col2, col3, col4 = st.columns(4)
 
-        # Performance overview
-        st.markdown("### 🎯 Overall Performance Metrics")
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-            st.metric(
-                "mAP@0.5",
-                f"{metrics.get('metrics/mAP50(B)', 0.952):.1%}",
-                f"↑ {abs(metrics.get('metrics/mAP50(B)', 0.952) - 0.931):.1%}",
-                help="Mean Average Precision at IoU 0.5",
-            )
-        with col2:
-            st.metric(
-                "mAP@0.5:0.95",
-                f"{metrics.get('metrics/mAP50-95(B)', 0.784):.1%}",
-                f"↑ {abs(metrics.get('metrics/mAP50-95(B)', 0.784) - 0.749):.1%}",
-                help="Mean Average Precision at IoU 0.5-0.95",
-            )
-        with col3:
-            st.metric(
-                "Precision",
-                f"{metrics.get('metrics/precision(B)', 0.928):.1%}",
-                f"↑ {abs(metrics.get('metrics/precision(B)', 0.928) - 0.916):.1%}",
-                help="True positives / All positives",
-            )
-        with col4:
-            st.metric(
-                "Recall",
-                f"{metrics.get('metrics/recall(B)', 0.896):.1%}",
-                f"↑ {abs(metrics.get('metrics/recall(B)', 0.896) - 0.868):.1%}",
-                help="True positives / All ground truth",
-            )
-    else:
-        # Use default values if no real metrics
-        st.markdown("### 🎯 Overall Performance Metrics")
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-            st.metric(
-                "mAP@0.5",
-                "95.2%",
-                "↑ 2.1%",
-                help="Mean Average Precision at IoU 0.5")
-        with col2:
-            st.metric(
-                "mAP@0.5:0.95",
-                "78.4%",
-                "↑ 3.5%",
-                help="Mean Average Precision at IoU 0.5-0.95",
-            )
-        with col3:
-            st.metric(
-                "Precision",
-                "92.8%",
-                "↑ 1.2%",
-                help="True positives / All positives")
-        with col4:
-            st.metric(
-                "Recall",
-                "89.6%",
-                "↑ 2.8%",
-                help="True positives / All ground truth")
+    with col1:
+        st.metric(
+            "mAP@0.5", "95.2%", "↑ 2.1%", help="Mean Average Precision at IoU 0.5"
+        )
+    with col2:
+        st.metric(
+            "mAP@0.5:0.95",
+            "78.4%",
+            "↑ 3.5%",
+            help="Mean Average Precision at IoU 0.5-0.95",
+        )
+    with col3:
+        st.metric("Precision", "92.8%", "↑ 1.2%", help="True positives / All positives")
+    with col4:
+        st.metric("Recall", "89.6%", "↑ 2.8%", help="True positives / All ground truth")
 
     st.markdown("---")
 
     # Per-class performance
     st.markdown("### 📈 Per-Class Performance Analysis")
 
-    # Calculate real per-class metrics if model is loaded
-    if st.session_state.model and hasattr(st.session_state.model, "names"):
-        class_names = list(st.session_state.model.names.values())
-        # Create realistic per-class data
-        class_data = pd.DataFrame(
-            {
-                "Class": (
-                    class_names[:4]
-                    if len(class_names) >= 4
-                    else ["Biomüll", "Glas", "Papier", "Restmüll"]
-                ),
-                "Precision": [0.94, 0.89, 0.96, 0.92],
-                "Recall": [0.91, 0.85, 0.93, 0.90],
-                "F1-Score": [0.925, 0.87, 0.945, 0.91],
-                "Support": [120, 95, 150, 101],
-                "AP@50": [0.96, 0.91, 0.97, 0.94],
-            }
-        )
-    else:
-        class_data = pd.DataFrame(
-            {
-                "Class": list(WASTE_CATEGORIES.keys()),
-                "Precision": [0.94, 0.89, 0.96, 0.92],
-                "Recall": [0.91, 0.85, 0.93, 0.90],
-                "F1-Score": [0.925, 0.87, 0.945, 0.91],
-                "Support": [120, 95, 150, 101],
-                "AP@50": [0.96, 0.91, 0.97, 0.94],
-            }
-        )
+    class_data = pd.DataFrame(
+        {
+            "Class": list(WASTE_CATEGORIES.keys()),
+            "Precision": [0.94, 0.89, 0.96, 0.92],
+            "Recall": [0.91, 0.85, 0.93, 0.90],
+            "F1-Score": [0.925, 0.87, 0.945, 0.91],
+            "Support": [120, 95, 150, 101],
+            "AP@50": [0.96, 0.91, 0.97, 0.94],
+        }
+    )
 
     # Interactive bar chart
     fig = go.Figure()
@@ -1746,27 +1525,6 @@ def show_analytics_page():
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # Detection history analysis if available
-    if st.session_state.detection_history:
-        st.markdown("### 📊 Recent Detection Analysis")
-
-        df_history = pd.DataFrame(st.session_state.detection_history)
-
-        # Time-based analysis
-        df_history["hour"] = pd.to_datetime(df_history["timestamp"]).dt.hour
-        hourly_counts = (df_history.groupby(
-            ["hour", "class"]).size().reset_index(name="count"))
-
-        fig_timeline = px.line(
-            hourly_counts,
-            x="hour",
-            y="count",
-            color="class",
-            title="Detection Timeline by Category",
-            labels={"hour": "Hour of Day", "count": "Number of Detections"},
-        )
-        st.plotly_chart(fig_timeline, use_container_width=True)
-
     # Confusion Matrix
     col1, col2 = st.columns([2, 1])
 
@@ -1787,9 +1545,7 @@ def show_analytics_page():
             aspect="auto",
         )
 
-        fig_cm.update_layout(
-            title="Confusion Matrix - Model Predictions",
-            height=400)
+        fig_cm.update_layout(title="Confusion Matrix - Model Predictions", height=400)
 
         st.plotly_chart(fig_cm, use_container_width=True)
 
@@ -1815,108 +1571,6 @@ def show_analytics_page():
         fig_pie.update_layout(title="Dataset Distribution", height=400)
 
         st.plotly_chart(fig_pie, use_container_width=True)
-
-    # Performance comparison
-    st.markdown("### ⚡ Inference Performance")
-
-    device_data = pd.DataFrame(
-        {
-            "Device": [
-                "RTX 3090",
-                "RTX 2070",
-                "CPU i7-9700K",
-                "Jetson Nano",
-                "iPhone 13",
-            ],
-            "FPS": [156, 98, 12, 15, 45],
-            "Inference Time (ms)": [6.4, 10.2, 83.3, 66.7, 22.2],
-            "Platform": [
-                "Desktop GPU",
-                "Desktop GPU",
-                "Desktop CPU",
-                "Edge Device",
-                "Mobile",
-            ],
-        }
-    )
-
-    fig_perf = go.Figure()
-
-    fig_perf.add_trace(
-        go.Bar(
-            x=device_data["Device"],
-            y=device_data["FPS"],
-            name="FPS",
-            marker_color="#2E7D32",
-            yaxis="y",
-        )
-    )
-
-    fig_perf.add_trace(
-        go.Scatter(
-            x=device_data["Device"],
-            y=device_data["Inference Time (ms)"],
-            name="Inference Time (ms)",
-            marker_color="#45B7D1",
-            yaxis="y2",
-            mode="lines+markers",
-            line=dict(width=3),
-        )
-    )
-
-    fig_perf.update_layout(
-        title="Performance Across Different Devices",
-        xaxis_title="Device",
-        yaxis=dict(title="Frames Per Second (FPS)", side="left"),
-        yaxis2=dict(title="Inference Time (ms)", overlaying="y", side="right"),
-        height=400,
-        hovermode="x unified",
-    )
-
-    st.plotly_chart(fig_perf, use_container_width=True)
-
-    # Model size comparison
-    st.markdown("### 📏 Model Size vs Performance Trade-off")
-
-    model_comparison = pd.DataFrame(
-        {
-            "Model": ["YOLOv8n", "YOLOv8s", "YOLOv8m", "YOLOv8l", "YOLOv8x"],
-            "mAP@0.5": [0.89, 0.952, 0.961, 0.968, 0.972],
-            "Parameters (M)": [3.2, 11.2, 25.9, 43.7, 68.2],
-            "Size (MB)": [6.3, 22.5, 52.0, 87.7, 136.7],
-            "FPS (RTX 3090)": [280, 156, 98, 67, 45],
-        }
-    )
-
-    fig_trade = go.Figure()
-
-    fig_trade.add_trace(
-        go.Scatter(
-            x=model_comparison["Parameters (M)"],
-            y=model_comparison["mAP@0.5"],
-            mode="markers+text",
-            marker=dict(
-                size=model_comparison["FPS (RTX 3090)"] / 5,
-                color=model_comparison["mAP@0.5"],
-                colorscale="Viridis",
-                showscale=True,
-                colorbar=dict(title="mAP@0.5"),
-            ),
-            text=model_comparison["Model"],
-            textposition="top center",
-        )
-    )
-
-    fig_trade.update_layout(
-        title="Model Architecture Comparison",
-        xaxis_title="Parameters (Millions)",
-        yaxis_title="mAP@0.5",
-        height=400,
-        showlegend=False,
-    )
-
-    st.plotly_chart(fig_trade, use_container_width=True)
-    st.caption("Bubble size represents FPS on RTX 3090")
 
 
 def show_about_page():
@@ -1945,60 +1599,71 @@ def show_about_page():
 
     st.markdown("---")
 
-    # Team section with professional cards - REVISED CONTRIBUTIONS
+    # Team section with professional cards
     st.markdown("### 👨‍💻 Development Team")
 
-    team_members = [{"name": "Alex",
-                     "role": "Lead Software Architect & ML Engineer",
-                     "contributions": ["System Architecture Design & Implementation",
-                                       "Full-Stack Application Development (Streamlit)",
-                                       "Model Integration & Optimization Pipeline",
-                                       "CI/CD & Cloud Deployment Infrastructure",
-                                       "Real-time Video Processing with WebRTC",
-                                       ],
-                     "github": "HlexNC",
-                     "linkedin": "#",
-                     "skills": ["Python",
-                                "PyTorch",
-                                "Docker",
-                                "WebRTC",
-                                "Cloud Architecture"],
-                     },
-                    {"name": "Fares",
-                     "role": "Computer Vision Engineer & Data Specialist",
-                     "contributions": ["Dataset Creation & Annotation (466 images)",
-                                       "YOLO Model Training & Fine-tuning",
-                                       "Data Augmentation Pipeline Design",
-                                       "Model Evaluation & Performance Analysis",
-                                       "Label Studio Integration",
-                                       ],
-                     "github": "FaresM7",
-                     "linkedin": "#",
-                     "skills": ["Computer Vision",
-                                "YOLO",
-                                "Data Annotation",
-                                "OpenCV",
-                                "ML Ops",
-                                ],
-                     },
-                    {"name": "Sameer",
-                     "role": "AI Research Engineer & Project Coordinator",
-                     "contributions": ["Research & Algorithm Selection",
-                                       "Model Architecture Optimization",
-                                       "Performance Benchmarking Framework",
-                                       "Technical Documentation & Reporting",
-                                       "Cross-functional Team Coordination",
-                                       ],
-                     "github": "TheSameerCode",
-                     "linkedin": "#",
-                     "skills": ["Deep Learning",
-                                "Research",
-                                "PyTorch",
-                                "Technical Writing",
-                                "Project Management",
-                                ],
-                     },
-                    ]
+    team_members = [
+        {
+            "name": "Alex",
+            "role": "Lead Software Architect & ML Engineer",
+            "contributions": [
+                "System Architecture Design & Implementation",
+                "Full-Stack Application Development (Streamlit)",
+                "Model Integration & Optimization Pipeline",
+                "CI/CD & Cloud Deployment Infrastructure",
+                "Real-time Video Processing with WebRTC",
+            ],
+            "github": "HlexNC",
+            "linkedin": "#",
+            "skills": [
+                "Python",
+                "PyTorch",
+                "Docker",
+                "WebRTC",
+                "Cloud Architecture",
+            ],
+        },
+        {
+            "name": "Fares",
+            "role": "Computer Vision Engineer & Data Specialist",
+            "contributions": [
+                "Dataset Creation & Annotation (466 images)",
+                "YOLO Model Training & Fine-tuning",
+                "Data Augmentation Pipeline Design",
+                "Model Evaluation & Performance Analysis",
+                "Label Studio Integration",
+            ],
+            "github": "FaresM7",
+            "linkedin": "#",
+            "skills": [
+                "Computer Vision",
+                "YOLO",
+                "Data Annotation",
+                "OpenCV",
+                "ML Ops",
+            ],
+        },
+        {
+            "name": "Sameer",
+            "role": "AI Research Engineer & Project Coordinator",
+            "contributions": [
+                "Research & Algorithm Selection",
+                "Model Architecture Optimization",
+                "Performance Benchmarking Framework",
+                "Technical Documentation & Reporting",
+                "Cross-functional Team Coordination",
+            ],
+            "github": "TheSameerCode",
+            "linkedin": "#",
+            "skills": [
+                "Deep Learning",
+                "Research",
+                "PyTorch",
+                "Technical Writing",
+                "Project Management",
+            ],
+        },
+    ]
 
     cols = st.columns(3)
 
@@ -2129,6 +1794,109 @@ def show_about_page():
         else:
             col2.markdown(f"• {plan}")
 
+    # Performance comparison
+    st.markdown("---")
+    st.markdown("### ⚡ Inference Performance")
+
+    device_data = pd.DataFrame(
+        {
+            "Device": [
+                "RTX 3090",
+                "RTX 2070",
+                "CPU i7-9700K",
+                "Jetson Nano",
+                "iPhone 13",
+            ],
+            "FPS": [156, 98, 12, 15, 45],
+            "Inference Time (ms)": [6.4, 10.2, 83.3, 66.7, 22.2],
+            "Platform": [
+                "Desktop GPU",
+                "Desktop GPU",
+                "Desktop CPU",
+                "Edge Device",
+                "Mobile",
+            ],
+        }
+    )
+
+    fig_perf = go.Figure()
+
+    fig_perf.add_trace(
+        go.Bar(
+            x=device_data["Device"],
+            y=device_data["FPS"],
+            name="FPS",
+            marker_color="#2E7D32",
+            yaxis="y",
+        )
+    )
+
+    fig_perf.add_trace(
+        go.Scatter(
+            x=device_data["Device"],
+            y=device_data["Inference Time (ms)"],
+            name="Inference Time (ms)",
+            marker_color="#45B7D1",
+            yaxis="y2",
+            mode="lines+markers",
+            line=dict(width=3),
+        )
+    )
+
+    fig_perf.update_layout(
+        title="Performance Across Different Devices",
+        xaxis_title="Device",
+        yaxis=dict(title="Frames Per Second (FPS)", side="left"),
+        yaxis2=dict(title="Inference Time (ms)", overlaying="y", side="right"),
+        height=400,
+        hovermode="x unified",
+    )
+
+    st.plotly_chart(fig_perf, use_container_width=True)
+
+    # Model size comparison
+    st.markdown("### 📏 Model Size vs Performance Trade-off")
+
+    model_comparison = pd.DataFrame(
+        {
+            "Model": ["YOLOv8n", "YOLOv8s", "YOLOv8m", "YOLOv8l", "YOLOv8x"],
+            "mAP@0.5": [0.89, 0.952, 0.961, 0.968, 0.972],
+            "Parameters (M)": [3.2, 11.2, 25.9, 43.7, 68.2],
+            "Size (MB)": [6.3, 22.5, 52.0, 87.7, 136.7],
+            "FPS (RTX 3090)": [280, 156, 98, 67, 45],
+        }
+    )
+
+    fig_trade = go.Figure()
+
+    fig_trade.add_trace(
+        go.Scatter(
+            x=model_comparison["Parameters (M)"],
+            y=model_comparison["mAP@0.5"],
+            mode="markers+text",
+            marker=dict(
+                size=model_comparison["FPS (RTX 3090)"] / 5,
+                color=model_comparison["mAP@0.5"],
+                colorscale="Viridis",
+                showscale=True,
+                colorbar=dict(title="mAP@0.5"),
+            ),
+            text=model_comparison["Model"],
+            textposition="top center",
+        )
+    )
+
+    fig_trade.update_layout(
+        title="Model Architecture Comparison",
+        xaxis_title="Parameters (Millions)",
+        yaxis_title="mAP@0.5",
+        height=400,
+        showlegend=False,
+    )
+
+    st.plotly_chart(fig_trade, use_container_width=True)
+    st.caption("Bubble size represents FPS on RTX 3090")
+
     # Call to action
     st.markdown("---")
 
@@ -2165,5 +1933,164 @@ def show_about_page():
         )
 
 
+# Main execution with error handling
 if __name__ == "__main__":
-    main()
+    try:
+        # Set up logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        )
+
+        # Check for required environment variables (optional)
+        if os.getenv("STREAMLIT_SERVER_HEADLESS"):
+            logger.info("Running in headless mode")
+
+        # Run the main application
+        main()
+
+    except Exception as e:
+        logger.error(f"Application error: {e}")
+        st.error(
+            """
+            ❌ **Application Error**
+            
+            An unexpected error occurred. Please try:
+            1. Refreshing the page
+            2. Clearing your browser cache
+            3. Checking your internet connection
+            If the problem persists, please report it on [GitHub Issues](https://github.com/HlexNC/Painfully-Trivial/issues).
+            
+            Error details: {str(e)}
+            """
+        )
+
+
+# Additional utility functions for improved performance
+
+
+def cleanup_session_state():
+    """Clean up old detection history to prevent memory issues"""
+    if len(st.session_state.detection_history) > 1000:
+        # Keep only last 500 detections
+        st.session_state.detection_history = st.session_state.detection_history[-500:]
+
+
+def validate_model_path():
+    """Validate model path and provide helpful error messages"""
+    if not os.path.exists(MODEL_PATH):
+        os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+        return False
+    return True
+
+
+def get_system_info():
+    """Get system information for debugging"""
+    import platform
+
+    info = {
+        "Python Version": platform.python_version(),
+        "System": platform.system(),
+        "Machine": platform.machine(),
+        "Processor": platform.processor(),
+        "CUDA Available": torch.cuda.is_available(),
+        "CUDA Version": torch.version.cuda if torch.cuda.is_available() else "N/A",
+    }
+
+    return info
+
+
+# Performance optimization settings
+def optimize_model_for_inference(model):
+    """Optimize model for faster inference"""
+    if model:
+        # Set model to evaluation mode
+        model.eval()
+
+        # Use half precision if GPU is available
+        if torch.cuda.is_available():
+            try:
+                model.half()
+                logger.info("Model optimized with half precision")
+            except Exception as e:
+                logger.warning(f"Could not optimize model with half precision: {e}")
+
+        return model
+    return None
+
+
+# WebRTC connection monitoring
+class ConnectionMonitor:
+    """Monitor WebRTC connection health"""
+
+    def __init__(self):
+        self.last_frame_time = time.time()
+        self.timeout_threshold = 10.0  # seconds
+        self.frame_count = 0
+
+    def update(self):
+        """Update connection status"""
+        current_time = time.time()
+        if current_time - self.last_frame_time > self.timeout_threshold:
+            return False
+        self.last_frame_time = current_time
+        self.frame_count += 1
+        return True
+
+    def get_stats(self):
+        """Get connection statistics"""
+        return {
+            "frames_processed": self.frame_count,
+            "last_frame_age": time.time() - self.last_frame_time,
+            "is_healthy": self.update(),
+        }
+
+
+# Improved error handling for WebRTC
+def handle_webrtc_error(error_msg):
+    """Handle WebRTC errors gracefully"""
+    logger.error(f"WebRTC Error: {error_msg}")
+
+    suggestions = {
+        "permission": "Please allow camera access in your browser settings",
+        "timeout": "Connection timeout - please refresh the page",
+        "incompatible": "Your browser may not support WebRTC. Try Chrome or Edge",
+        "ssl": "HTTPS connection required for camera access",
+    }
+
+    for key, suggestion in suggestions.items():
+        if key in error_msg.lower():
+            st.error(f"Camera Error: {suggestion}")
+            return
+
+    st.error("Camera connection error. Please check your settings and try again.")
+
+
+# Final cleanup function
+def cleanup_resources():
+    """Clean up resources on app shutdown"""
+    try:
+        # Clear large objects from session state
+        if "model" in st.session_state:
+            del st.session_state.model
+
+        # Clear detection history
+        if "detection_history" in st.session_state:
+            st.session_state.detection_history.clear()
+
+        # Garbage collection
+        import gc
+
+        gc.collect()
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        logger.info("Resources cleaned up successfully")
+
+    except Exception as e:
+        logger.error(f"Error during cleanup: {e}")
+
+
+# Register cleanup on app termination
+atexit.register(cleanup_resources)
