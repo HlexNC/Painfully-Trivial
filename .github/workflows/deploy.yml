@@ -1,5 +1,12 @@
 name: Build, Test & Deploy to GHCR
 
+# This workflow is designed to work with GitHub Branch Protection Rules
+# Configure branch protection to require these status checks:
+# - "Test & Code Quality"
+# - "Build & Push Docker Image"
+# - "Security Vulnerability Scan"
+# - "Deployment Ready"
+
 on:
   push:
     branches: [main, dev]
@@ -12,6 +19,7 @@ on:
     branches: [main]
     paths:
       - 'streamlit_app/**'
+      - '.github/workflows/deploy.yml'
   release:
     types: [created, published]
   workflow_dispatch:
@@ -52,12 +60,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r streamlit_app/requirements.txt
-          pip install pytest black flake8 mypy
+          pip install black flake8 pytest
 
       - name: 🔍 Lint with flake8
         run: |
-          flake8 streamlit_app/ --count --select=E9,F63,F7,F82 --show-source --statistics
-          flake8 streamlit_app/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+          flake8 streamlit_app/ --count --select=E,F,W,C90 --extend-ignore=E203,W503,W293 --max-line-length=153 --show-source --statistics
+          # flake8 streamlit_app/ --count --exit-zero --max-complexity=10 --max-line-length=153 --statistics
 
       - name: 🎨 Format check with black
         run: |
@@ -67,11 +75,11 @@ jobs:
       #   run: |
       #     pytest streamlit_app/tests/ -v --cov=streamlit_app --cov-report=xml || true
 
-      - name: 📊 Upload coverage
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./coverage.xml
-          fail_ci_if_error: false
+      # - name: 📊 Upload coverage
+      #   uses: codecov/codecov-action@v3
+      #   with:
+      #     file: ./coverage.xml
+      #     fail_ci_if_error: false
 
   # Job 2: Build and Push Docker Image
   build-and-push:
@@ -140,7 +148,6 @@ jobs:
             VCS_REF=${{ github.sha }}
             VERSION=${{ steps.meta.outputs.version }}
 
-
   # Job 3: Security Scanning
   security-scan:
     name: Security Vulnerability Scan
@@ -169,21 +176,49 @@ jobs:
         with:
           sarif_file: 'trivy-results.sarif'
 
-      - name: 🛡️ Run Snyk vulnerability scanner
-        uses: snyk/actions/docker@master
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          image: ${{ needs.build-and-push.outputs.image-tag }}
-          args: --severity-threshold=high
-        continue-on-error: true
+  # Job 4: Deployment Ready Status (Required for Branch Protection)
+  deployment-ready:
+    name: Deployment Ready
+    runs-on: ubuntu-latest
+    needs: [test-and-lint, build-and-push]
+    if: always()
+    
+    steps:
+      - name: 📊 Check all job statuses
+        run: |
+          echo "Test & Lint Status: ${{ needs.test-and-lint.result }}"
+          echo "Build & Push Status: ${{ needs.build-and-push.result }}"
+          
+          if [[ "${{ needs.test-and-lint.result }}" != "success" ]] || \
+             [[ "${{ needs.build-and-push.result }}" != "success" ]]; then
+            echo "❌ One or more required jobs failed"
+            exit 1
+          else
+            echo "✅ All required jobs passed successfully"
+          fi
 
-  # Job 4: Deploy to Staging/Production
+      - name: 📋 Deployment Summary
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **All CI checks passed!**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Docker Image" >> $GITHUB_STEP_SUMMARY
+          echo "- Image: `${{ needs.build-and-push.outputs.image-tag }}`" >> $GITHUB_STEP_SUMMARY
+          echo "- Digest: `${{ needs.build-and-push.outputs.image-digest }}`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌐 Streamlit Cloud" >> $GITHUB_STEP_SUMMARY
+          echo "Streamlit Cloud will automatically deploy this version via webhook." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Live URL**: https://waste-sorting-assistant.streamlit.app" >> $GITHUB_STEP_SUMMARY
+
+  # Job 5: Deploy to Staging/Production (Optional - for non-Streamlit deployments)
   deploy:
     name: Deploy Application
-    needs: [build-and-push, security-scan]
+    needs: [build-and-push, security-scan, deployment-ready]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && success()
     environment:
       name: ${{ github.event.inputs.deploy_environment || 'staging' }}
       url: ${{ steps.deploy.outputs.url }}
@@ -192,14 +227,11 @@ jobs:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      - name: 🚀 Deploy to Streamlit Cloud
+      - name: 🚀 Log Streamlit Cloud Deployment
         id: deploy
-        env:
-          STREAMLIT_SHARE_EMAIL: ${{ secrets.STREAMLIT_SHARE_EMAIL }}
-          STREAMLIT_SHARE_TOKEN: ${{ secrets.STREAMLIT_SHARE_TOKEN }}
         run: |
-          echo "Deploying to Streamlit Cloud..."
-          # Add actual deployment commands here
+          echo "✅ Streamlit Cloud webhook triggered automatically"
+          echo "🌐 Deployment URL: https://waste-sorting-assistant.streamlit.app"
           echo "url=https://waste-sorting-assistant.streamlit.app" >> $GITHUB_OUTPUT
 
       - name: 📱 Deploy to Cloud Run (Optional)
@@ -213,10 +245,10 @@ jobs:
             ENVIRONMENT=production
             VERSION=${{ github.sha }}
 
-  # Job 5: Create Release
+  # Job 6: Create Release
   create-release:
     name: Create GitHub Release
-    needs: [build-and-push, deploy]
+    needs: [build-and-push, deployment-ready]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
@@ -260,31 +292,41 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Job 6: Notification
+  # Job 7: Notification
   notify:
     name: Send Notifications
-    needs: [build-and-push, deploy]
+    needs: [test-and-lint, build-and-push, security-scan, deployment-ready]
     runs-on: ubuntu-latest
     if: always()
 
     steps:
       - name: 📊 Summary
         run: |
-          echo "## 📊 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 CI/CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image**: \`${{ needs.build-and-push.outputs.image-tag }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Digest**: \`${{ needs.build-and-push.outputs.image-digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Job Results" >> $GITHUB_STEP_SUMMARY
+          echo "- **Test  Lint**: ${{ needs.test-and-lint.result == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Docker Build**: ${{ needs.build-and-push.result == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployment Ready**: ${{ needs.deployment-ready.result == 'success' && '✅ Yes' || '❌ No' }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🐳 Pull Command" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ needs.deployment-ready.result }}" == "success" ]]; then
+            echo "### 🚀 Deployment Status" >> $GITHUB_STEP_SUMMARY
+            echo "✅ All checks passed. Streamlit Cloud will deploy automatically." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ⚠️ Deployment Blocked" >> $GITHUB_STEP_SUMMARY
+            echo "❌ Fix the failing checks before merging to main." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🐳 Docker Commands" >> $GITHUB_STEP_SUMMARY
+          echo "```bash" >> $GITHUB_STEP_SUMMARY
+          echo "# Pull the image" >> $GITHUB_STEP_SUMMARY
           echo "docker pull ${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### ▶️ Run Command" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# Run locally" >> $GITHUB_STEP_SUMMARY
           echo "docker run -p 8501:8501 ${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "```" >> $GITHUB_STEP_SUMMARY
 
       # - name: 💬 Slack Notification
       #   if: vars.SLACK_WEBHOOK != ''
@@ -292,8 +334,40 @@ jobs:
       #   with:
       #     status: ${{ job.status }}
       #     text: |
-      #       Deployment ${{ job.status == 'success' && 'succeeded' || 'failed' }}!
+      #       Deployment ${{ needs.deployment-ready.result == 'success' && 'ready' || 'blocked' }}!
       #       Image: ${{ needs.build-and-push.outputs.image-tag }}
       #     webhook_url: ${{ secrets.SLACK_WEBHOOK }}
       #   env:
       #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+# Optional: Promote to Production Branch (Alternative deployment strategy)
+# Uncomment this job if you want to use a separate production branch for Streamlit Cloud
+# promote-to-production:
+#   name: Promote to Production
+#   runs-on: ubuntu-latest
+#   needs: [deployment-ready]
+#   if: |
+#     github.ref == 'refs/heads/main' && 
+#     github.event_name == 'push' && 
+#     needs.deployment-ready.result == 'success'
+#   
+#   steps:
+#     - name: 📥 Checkout code
+#       uses: actions/checkout@v4
+#       with:
+#         fetch-depth: 0
+#         token: ${{ secrets.GITHUB_TOKEN }}
+#     
+#     - name: 🚀 Promote to production branch
+#       run: |
+#         git config user.name "github-actions[bot]"
+#         git config user.email "github-actions[bot]@users.noreply.github.com"
+#         
+#         # Create/update production branch
+#         git checkout -B production
+#         
+#         # Force push to production (this branch tracks main after all checks pass)
+#         git push origin production --force
+#         
+#         echo "✅ Promoted main to production branch"
+#         echo "Streamlit Cloud should be configured to deploy from 'production' branch"

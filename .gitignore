@@ -11,5 +11,7 @@ runs
 /cv_garbage/models
 /cv_garbage/results
 /cv_garbage/labeled  
+__pycache__
+*coverage*
 output.json
 streamlit_app/models/waste_detector_best.pt
