@@ -523,7 +523,44 @@ def process_frame(frame, model, conf_threshold=0.5):
     return annotated_frame, detections
 
 
+def is_running_on_streamlit_cloud():
+    """
+    Detect if the app is running on Streamlit Cloud
+    Returns True if on Streamlit Cloud, False otherwise
+    """
+    import os
+
+    # Streamlit Cloud sets specific environment variables
+    streamlit_cloud_indicators = [
+        "STREAMLIT_SHARING_MODE",
+        "STREAMLIT_SERVER_HEADLESS",
+        "HOSTNAME",
+    ]
+
+    # Check for Streamlit Cloud specific environment
+    if os.getenv("STREAMLIT_SHARING_MODE") == "on":
+        return True
+
+    # Check if hostname contains streamlit domain patterns
+    hostname = os.getenv("HOSTNAME", "")
+    if "streamlit" in hostname.lower() or "streamlitapp" in hostname.lower():
+        return True
+
+    # Check for the specific Streamlit Cloud path structure
+    if "/mount/src/" in os.getcwd():
+        return True
+
+    # Additional check for Streamlit Cloud's execution environment
+    if os.path.exists("/home/appuser/venv") or os.path.exists("/home/adminuser/venv"):
+        return True
+
+    return False
+
+
 def main():
+    # Check if on Streamlit Cloud
+    is_cloud = is_running_on_streamlit_cloud()
+
     # Professional sidebar
     with st.sidebar:
         # Logo/Banner
@@ -577,10 +614,25 @@ def main():
             )
             st.metric("Model", model_status)
         with col2:
-            camera_status = (
-                "🟢 Active" if st.session_state.camera_active else "⚫ Inactive"
-            )
-            st.metric("Camera", camera_status)
+            if is_cloud:
+                # Show different status for Streamlit Cloud
+                camera_status = "☁️ Cloud Mode"
+                st.metric(
+                    "Camera",
+                    camera_status,
+                    help="Live webcam not available on cloud. Use Camera Snapshot instead.",
+                )
+            else:
+                camera_status = (
+                    "🟢 Active" if st.session_state.camera_active else "⚫ Inactive"
+                )
+                st.metric("Camera", camera_status)
+
+        # Add environment indicator
+        if is_cloud:
+            st.info("☁️ Running on Streamlit Cloud")
+        else:
+            st.success("💻 Running Locally")
 
         st.markdown("---")
 
@@ -595,6 +647,18 @@ def main():
             - Precision: {metrics.get('metrics/precision(B)', 0.928):.1%}
             - Recall: {metrics.get('metrics/recall(B)', 0.896):.1%}
             """
+            )
+
+        # Add deployment options for cloud users
+        if is_cloud:
+            st.markdown("---")
+            st.markdown("### 🚀 Need Live Webcam?")
+            st.markdown(
+                """
+                [📥 Run Locally](https://github.com/HlexNC/Painfully-Trivial#quick-start)
+                
+                [🐳 Use Docker](https://github.com/HlexNC/Painfully-Trivial#option-1-run-with-docker-recommended)
+                """
             )
 
         # Professional footer
@@ -776,15 +840,53 @@ def show_detection_page():
                 st.error("❌ Failed to load model")
                 return
 
+    # Check if running on Streamlit Cloud
+    is_cloud = is_running_on_streamlit_cloud()
+
     # Detection settings
     col1, col2, col3 = st.columns([2, 2, 1])
 
     with col1:
-        detection_mode = st.selectbox(
-            "📷 Input Source",
-            ["Live Webcam", "Camera Snapshot", "Upload Image", "Upload Video"],
-            help="Choose your input method for waste bin detection",
-        )
+        # Modify detection modes based on environment
+        if is_cloud:
+            # Exclude Live Webcam on Streamlit Cloud
+            detection_modes = ["Camera Snapshot", "Upload Image", "Upload Video"]
+            default_mode = "Camera Snapshot"
+
+            # Show info about webcam limitation
+            detection_mode = st.selectbox(
+                "📷 Input Source",
+                detection_modes,
+                help="Live Webcam is not available on Streamlit Cloud. Please use Camera Snapshot or run locally for real-time detection.",
+            )
+
+            # Add an info box about the limitation
+            if st.session_state.get("show_webcam_info", True):
+                st.info(
+                    """
+                    💡 **Note about Live Webcam**: Real-time webcam streaming requires WebRTC configuration that isn't available on Streamlit Cloud. 
+                    
+                    **Available options:**
+                    - 📸 Use **Camera Snapshot** to take photos with your camera
+                    - 🖼️ **Upload Image** for existing photos
+                    - 🎥 **Upload Video** for recorded videos
+                    
+                    **For Live Webcam:** [Run the app locally](https://github.com/HlexNC/Painfully-Trivial#option-3-local-development) or use our [Docker deployment](https://github.com/HlexNC/Painfully-Trivial#option-1-run-with-docker-recommended)
+                    """
+                )
+        else:
+            # Full options when running locally
+            detection_modes = [
+                "Live Webcam",
+                "Camera Snapshot",
+                "Upload Image",
+                "Upload Video",
+            ]
+            detection_mode = st.selectbox(
+                "📷 Input Source",
+                detection_modes,
+                help="Choose your input method for waste bin detection",
+            )
 
     with col2:
         conf_threshold = st.slider(
@@ -804,79 +906,103 @@ def show_detection_page():
     st.markdown("---")
 
     # Detection interface based on mode
-    if detection_mode == "Live Webcam":
+    if detection_mode == "Live Webcam" and not is_cloud:
+        # Only show Live Webcam interface if not on Streamlit Cloud
         st.info("🎥 Live webcam streaming - grant camera permissions when prompted")
 
-        # Detection stats container
-        stats_container = st.container()
+        # Add fallback message for connection issues
+        try:
+            # Detection stats container
+            stats_container = st.container()
 
-        # Create video processor instance and set model
-        processor = WasteDetectionProcessor()
-        processor.model = st.session_state.model
-        processor.confidence_threshold = conf_threshold
+            # Create video processor instance and set model
+            processor = WasteDetectionProcessor()
+            processor.model = st.session_state.model
+            processor.confidence_threshold = conf_threshold
 
-        # Use the correct parameter name for video processor
-        webrtc_ctx = webrtc_streamer(
-            key="waste-detection",
-            mode=WebRtcMode.SENDRECV,
-            rtc_configuration={"iceServers": []},
-            video_processor_factory=lambda: processor,  # Fixed: using correct parameter
-            media_stream_constraints={
-                "video": {
-                    "width": {"min": 640, "ideal": 1280, "max": 1920},
-                    "height": {"min": 480, "ideal": 720, "max": 1080},
+            # Simplified RTC configuration for local environments
+            rtc_config = {"iceServers": []}
+
+            # Show warning about potential connectivity issues
+            with st.expander("⚠️ Troubleshooting WebRTC Connection", expanded=False):
+                st.markdown(
+                    """
+                    If you're experiencing connection issues:
+                    - **Chrome/Edge**: Recommended browsers
+                    - **Firefox**: May require additional permissions
+                    - **Safari**: Limited WebRTC support
+                    - **VPN**: Disable VPN if experiencing issues
+                    - **Firewall**: Ensure WebRTC ports are not blocked
+                    
+                    For best results, [run locally with Docker](https://github.com/HlexNC/Painfully-Trivial#quick-start)
+                    """
+                )
+
+            # Use the correct parameter name for video processor
+            webrtc_ctx = webrtc_streamer(
+                key="waste-detection",
+                mode=WebRtcMode.SENDRECV,
+                rtc_configuration=rtc_config,
+                video_processor_factory=lambda: processor,
+                media_stream_constraints={
+                    "video": {
+                        "width": {"min": 640, "ideal": 1280, "max": 1920},
+                        "height": {"min": 480, "ideal": 720, "max": 1080},
+                    },
+                    "audio": False,
                 },
-                "audio": False,
-            },
-            async_processing=True,
-        )
+                async_processing=True,
+            )
 
-        # Update camera status
-        st.session_state.camera_active = webrtc_ctx.state.playing
+            # Update camera status
+            st.session_state.camera_active = webrtc_ctx.state.playing
 
-        if webrtc_ctx.state.playing:
-            with stats_container:
-                st.markdown("### 📊 Live Detection Statistics")
+            if webrtc_ctx.state.playing:
+                with stats_container:
+                    st.markdown("### 📊 Live Detection Statistics")
 
-                # Periodically check for detections from the processor
-                if webrtc_ctx.video_processor:
-                    recent_detections = []
-                    while not webrtc_ctx.video_processor.detection_queue.empty():
-                        try:
-                            detection = (
-                                webrtc_ctx.video_processor.detection_queue.get_nowait()
-                            )
-                            recent_detections.append(detection)
-                            st.session_state.detection_history.append(detection)
-                        except queue.Empty:
-                            break
-
-                    # Show recent detections
-                    if recent_detections:
-                        df = pd.DataFrame(recent_detections)
-                        detection_counts = df["class"].value_counts()
-
-                        cols = st.columns(len(WASTE_CATEGORIES))
-                        for idx, category in enumerate(WASTE_CATEGORIES.keys()):
-                            with cols[idx]:
-                                count = detection_counts.get(category, 0)
-                                st.metric(
-                                    f"{WASTE_CATEGORIES[category]['icon']} {category}",
-                                    f"{count} detections",
+                    # Periodically check for detections from the processor
+                    if webrtc_ctx.video_processor:
+                        recent_detections = []
+                        while not webrtc_ctx.video_processor.detection_queue.empty():
+                            try:
+                                detection = (
+                                    webrtc_ctx.video_processor.detection_queue.get_nowait()
                                 )
-                    else:
-                        st.info("👀 Looking for waste bins...")
+                                recent_detections.append(detection)
+                                st.session_state.detection_history.append(detection)
+                            except queue.Empty:
+                                break
 
-        # Camera tips
-        with st.expander("📹 Camera Tips", expanded=False):
-            st.markdown(
+                        # Show recent detections
+                        if recent_detections:
+                            df = pd.DataFrame(recent_detections)
+                            detection_counts = df["class"].value_counts()
+
+                            cols = st.columns(len(WASTE_CATEGORIES))
+                            for idx, category in enumerate(WASTE_CATEGORIES.keys()):
+                                with cols[idx]:
+                                    count = detection_counts.get(category, 0)
+                                    st.metric(
+                                        f"{WASTE_CATEGORIES[category]['icon']} {category}",
+                                        f"{count} detections",
+                                    )
+                        else:
+                            st.info("👀 Looking for waste bins...")
+
+        except Exception as e:
+            logger.error(f"WebRTC streaming error: {e}")
+            st.error(
                 """
-            - **Lighting**: Ensure good lighting for better detection
-            - **Distance**: Keep bins at 1-2 meters distance
-            - **Angle**: Face the bin directly for best results
-            - **Browser**: Chrome or Edge recommended for best compatibility
-            - **Permissions**: Allow camera access when prompted
-            """
+                ❌ **Live webcam connection failed**
+                
+                This typically happens due to network restrictions. Please try:
+                1. Using **Camera Snapshot** mode instead
+                2. Running the app locally for full webcam support
+                3. Checking your browser's camera permissions
+                
+                [View setup instructions →](https://github.com/HlexNC/Painfully-Trivial#camera-setup)
+                """
             )
 
     elif detection_mode == "Camera Snapshot":
@@ -1118,6 +1244,33 @@ def show_detection_page():
                 os.unlink(tfile.name)
                 if out_path and os.path.exists(out_path):
                     os.unlink(out_path)
+
+    # Always show camera tips at the bottom, adjusted for environment
+    with st.expander("📹 Camera Tips", expanded=False):
+        if is_cloud:
+            st.markdown(
+                """
+                **For Streamlit Cloud Users:**
+                - **Camera Snapshot**: Click the camera button to take a photo
+                - **Mobile**: Works great on phones - just visit the site on your mobile browser
+                - **Best Practice**: Take clear, well-lit photos of bins from 1-2 meters away
+                
+                **Want Live Detection?**
+                - [Run locally with pip](https://github.com/HlexNC/Painfully-Trivial#option-3-local-development)
+                - [Use Docker](https://github.com/HlexNC/Painfully-Trivial#option-1-run-with-docker-recommended)
+                - [Deploy your own instance](https://github.com/HlexNC/Painfully-Trivial#deployment)
+                """
+            )
+        else:
+            st.markdown(
+                """
+                - **Lighting**: Ensure good lighting for better detection
+                - **Distance**: Keep bins at 1-2 meters distance
+                - **Angle**: Face the bin directly for best results
+                - **Browser**: Chrome or Edge recommended for best compatibility
+                - **Permissions**: Allow camera access when prompted
+                """
+            )
 
 
 def show_detection_info(detection):
