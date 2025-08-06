@@ -1304,7 +1304,7 @@ def train_model_simulation(
     }
 
     # Simulate training progress
-    actual_epochs = min(epochs, 10)  # Limit for demo
+    actual_epochs = min(epochs, 100)  # Limit for demo
 
     for epoch in range(actual_epochs):
         progress = (epoch + 1) / actual_epochs
