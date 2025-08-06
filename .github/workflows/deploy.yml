@@ -110,7 +110,6 @@ jobs:
             network=host
 
       - name: 🔐 Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -139,7 +138,7 @@ jobs:
           context: ./streamlit_app
           file: ./streamlit_app/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=ghcr.io/hlexnc/waste-sorting-assistant:buildcache
@@ -154,7 +153,6 @@ jobs:
     name: Security Vulnerability Scan
     needs: build-and-push
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
     permissions:
       contents: read
       packages: read
