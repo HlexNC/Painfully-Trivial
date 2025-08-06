@@ -40,11 +40,12 @@ EXPLICIT_IGNORE_FOLDERS = {
     '.ruff_cache',
     'images',
     'labels',
-    # 'models',
+    'models',
     'labeled',
     # ".github",
-    # "docs",
-    # "ml_deutsche_bahn",
+    "docs",
+    'cv_garbage',
+    "ml_deutsche_bahn",
 }
 
 def parse_ignore_file(ignore_file_path):
