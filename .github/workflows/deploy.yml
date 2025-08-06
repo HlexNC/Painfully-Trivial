@@ -308,6 +308,8 @@ jobs:
           echo "- **Test  Lint**: ${{ needs.test-and-lint.result == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Docker Build**: ${{ needs.build-and-push.result == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Deployment Ready**: ${{ needs.deployment-ready.result == 'success' && '✅ Yes' || '❌ No' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: \`${{ needs.build-and-push.outputs.image-tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Digest**: \`${{ needs.build-and-push.outputs.image-digest }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [[ "${{ needs.deployment-ready.result }}" == "success" ]]; then
@@ -320,13 +322,13 @@ jobs:
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🐳 Docker Commands" >> $GITHUB_STEP_SUMMARY
-          echo "```bash" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
           echo "# Pull the image" >> $GITHUB_STEP_SUMMARY
           echo "docker pull ${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "# Run locally" >> $GITHUB_STEP_SUMMARY
           echo "docker run -p 8501:8501 ${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
-          echo "```" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
       # - name: 💬 Slack Notification
       #   if: vars.SLACK_WEBHOOK != ''
