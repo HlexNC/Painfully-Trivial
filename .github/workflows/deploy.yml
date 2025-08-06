@@ -295,7 +295,7 @@ jobs:
   # Job 7: Notification
   notify:
     name: Send Notifications
-    needs: [build-and-push, deployment-ready]
+    needs: [test-and-lint, build-and-push, security-scan, deployment-ready]
     runs-on: ubuntu-latest
     if: always()
 
