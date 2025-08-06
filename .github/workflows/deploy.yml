@@ -320,13 +320,13 @@ jobs:
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🐳 Docker Commands" >> $GITHUB_STEP_SUMMARY
-          echo "```bash" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
           echo "# Pull the image" >> $GITHUB_STEP_SUMMARY
           echo "docker pull ${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "# Run locally" >> $GITHUB_STEP_SUMMARY
           echo "docker run -p 8501:8501 ${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
-          echo "```" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
       # - name: 💬 Slack Notification
       #   if: vars.SLACK_WEBHOOK != ''
