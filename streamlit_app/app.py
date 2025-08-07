@@ -530,13 +530,6 @@ def is_running_on_streamlit_cloud():
     """
     import os
 
-    # Streamlit Cloud sets specific environment variables
-    streamlit_cloud_indicators = [
-        "STREAMLIT_SHARING_MODE",
-        "STREAMLIT_SERVER_HEADLESS",
-        "HOSTNAME",
-    ]
-
     # Check for Streamlit Cloud specific environment
     if os.getenv("STREAMLIT_SHARING_MODE") == "on":
         return True
@@ -851,7 +844,6 @@ def show_detection_page():
         if is_cloud:
             # Exclude Live Webcam on Streamlit Cloud
             detection_modes = ["Camera Snapshot", "Upload Image", "Upload Video"]
-            default_mode = "Camera Snapshot"
 
             # Show info about webcam limitation
             detection_mode = st.selectbox(
@@ -864,14 +856,15 @@ def show_detection_page():
             if st.session_state.get("show_webcam_info", True):
                 st.info(
                     """
-                    💡 **Note about Live Webcam**: Real-time webcam streaming requires WebRTC configuration that isn't available on Streamlit Cloud. 
+                    💡 **Note about Live Webcam**: Real-time webcam streaming requires WebRTC configuration that isn't available on Streamlit Cloud.
                     
                     **Available options:**
                     - 📸 Use **Camera Snapshot** to take photos with your camera
                     - 🖼️ **Upload Image** for existing photos
                     - 🎥 **Upload Video** for recorded videos
                     
-                    **For Live Webcam:** [Run the app locally](https://github.com/HlexNC/Painfully-Trivial#option-3-local-development) or use our [Docker deployment](https://github.com/HlexNC/Painfully-Trivial#option-1-run-with-docker-recommended)
+                    **For Live Webcam:** [Run the app locally](https://github.com/HlexNC/Painfully-Trivial#option-3-local-development)
+                    or use our [Docker deployment](https://github.com/HlexNC/Painfully-Trivial#option-1-run-with-docker-recommended)
                     """
                 )
         else:
