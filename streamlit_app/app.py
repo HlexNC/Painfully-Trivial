@@ -650,7 +650,7 @@ def main():
                 """
                 [📥 Run Locally](https://github.com/HlexNC/Painfully-Trivial#quick-start)
                 
-                [🐳 Use Docker](https://github.com/HlexNC/Painfully-Trivial#option-1-run-with-docker-recommended)
+                [🐳 Use Docker](https://github.com/HlexNC/Painfully-Trivial/tree/main/streamlit_app#option-1-run-with-docker-recommended)
                 """
             )
 
@@ -863,8 +863,7 @@ def show_detection_page():
                     - 🖼️ **Upload Image** for existing photos
                     - 🎥 **Upload Video** for recorded videos
                     
-                    **For Live Webcam:** [Run the app locally](https://github.com/HlexNC/Painfully-Trivial#option-3-local-development)
-                    or use our [Docker deployment](https://github.com/HlexNC/Painfully-Trivial#option-1-run-with-docker-recommended)
+                    **For Live Webcam:** [Run the app locally](https://github.com/HlexNC/Painfully-Trivial/tree/main/streamlit_app#option-1-run-with-docker-recommended)
                     """
                 )
         else:
@@ -1249,9 +1248,8 @@ def show_detection_page():
                 - **Best Practice**: Take clear, well-lit photos of bins from 1-2 meters away
                 
                 **Want Live Detection?**
-                - [Run locally with pip](https://github.com/HlexNC/Painfully-Trivial#option-3-local-development)
-                - [Use Docker](https://github.com/HlexNC/Painfully-Trivial#option-1-run-with-docker-recommended)
-                - [Deploy your own instance](https://github.com/HlexNC/Painfully-Trivial#deployment)
+                - [Use Docker (Recommended)](https://github.com/HlexNC/Painfully-Trivial/tree/main/streamlit_app#option-1-run-with-docker-recommended
+                - [Run locally with pip](https://github.com/HlexNC/Painfully-Trivial/tree/main/streamlit_app#option-3-local-development)
                 """
             )
         else:
