@@ -50,13 +50,10 @@
 
 ```bash
 # Pull the latest image
-docker pull ghcr.io/hlexnc/waste-sorting-assistant:latest
+docker pull ghcr.io/hlexnc/waste-sorting-assistant:main
 
 # Run the container
-docker run -d \
-  --name waste-sorting \
-  -p 8501:8501 \
-  ghcr.io/hlexnc/waste-sorting-assistant:latest
+docker run -p 8501:8501 ghcr.io/hlexnc/waste-sorting-assistant:main
 
 # Access at http://localhost:8501
 ```
