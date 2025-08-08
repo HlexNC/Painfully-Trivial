@@ -15,6 +15,7 @@ import zipfile
 from datetime import datetime
 import queue
 from streamlit_webrtc import WebRtcMode, webrtc_streamer, VideoProcessorBase
+import streamlit.components.v1 as components
 import av
 import logging
 
@@ -40,6 +41,70 @@ st.set_page_config(
         """,
     },
 )
+
+
+def add_meta_tags():
+    """Add Open Graph and Twitter Card meta tags for social media previews"""
+
+    # Define your app's metadata
+    app_title = "Deggendorf Waste Sorting Assistant"
+    app_description = (
+        "AI-powered waste bin detection using YOLOv8. "
+        "Helps international students properly sort waste in Germany's "
+        "recycling system. 95.2% accuracy, real-time detection."
+    )
+
+    app_url = "https://waste-sorting-assistant.streamlit.app"
+
+    # Thumbnail URL
+    thumbnail_url = "https://raw.githubusercontent.com/HlexNC/Painfully-Trivial/main/docs/img/app-screenshot.png"
+
+    meta_tags = f"""
+    <meta property="og:title" content="{app_title}" />
+    <meta property="og:description" content="{app_description}" />
+    <meta property="og:url" content="{app_url}" />
+    <meta property="og:image" content="{thumbnail_url}" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Waste Sorting Assistant" />
+    
+    <!-- Twitter Card tags -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="{app_title}" />
+    <meta name="twitter:description" content="{app_description}" />
+    <meta name="twitter:image" content="{thumbnail_url}" />
+    
+    <!-- LinkedIn specific -->
+    <meta property="og:image:alt" content="Waste Sorting Assistant - AI-powered waste detection system" />
+    
+    <!-- Additional SEO tags -->
+    <meta name="description" content="{app_description}" />
+    <meta name="keywords" content="waste sorting, recycling, AI, computer vision, YOLOv8, Germany, Deggendorf, machine learning" />
+    <meta name="author" content="Team Painfully Trivial - TH Deggendorf" />
+    """
+
+    # Inject the meta tags into the page head
+    components.html(
+        f"""
+    <script>
+        // Function to add meta tags to document head
+        function addMetaTags() {{
+            const metaFragment = document.createRange().createContextualFragment(`{meta_tags}`);
+            document.head.appendChild(metaFragment);
+        }}
+        
+        // Add meta tags if they don't already exist
+        if (!document.querySelector('meta[property="og:title"]')) {{
+            addMetaTags();
+        }}
+    </script>
+    """,
+        height=0,
+    )
+
+
+add_meta_tags()
 
 # Custom CSS for professional portfolio appearance
 st.markdown(
@@ -854,18 +919,18 @@ def show_detection_page():
 
             # Add an info box about the limitation
             if st.session_state.get("show_webcam_info", True):
-                st.info(
-                    """
-                    💡 **Note about Live Webcam**: Real-time webcam streaming requires WebRTC configuration that isn't available on Streamlit Cloud.
-                    
-                    **Available options:**
-                    - 📸 Use **Camera Snapshot** to take photos with your camera
-                    - 🖼️ **Upload Image** for existing photos
-                    - 🎥 **Upload Video** for recorded videos
-                    
-                    **For Live Webcam:** [Run the app locally](https://github.com/HlexNC/Painfully-Trivial/tree/main/streamlit_app#option-1-run-with-docker-recommended)
-                    """
+                live_webcam_note = (
+                    "💡 **Note about Live Webcam**: Real-time webcam streaming requires WebRTC "
+                    "configuration that isn't available on Streamlit Cloud.\n\n"
+                    "**Available options:**\n"
+                    "- 📸 Use **Camera Snapshot** to take photos with your camera\n"
+                    "- 🖼️ **Upload Image** for existing photos\n"
+                    "- 🎥 **Upload Video** for recorded videos\n\n"
+                    "**For Live Webcam:** [Run the app locally]"
+                    "(https://github.com/HlexNC/Painfully-Trivial/tree/main/streamlit_app"
+                    "#option-1-run-with-docker-recommended)"
                 )
+                st.info(live_webcam_note)
         else:
             # Full options when running locally
             detection_modes = [
